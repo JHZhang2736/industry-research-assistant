@@ -61,3 +61,33 @@ React 18 + TypeScript + Ant Design + ECharts + Recharts + react-markdown + Zusta
 - 架构：多智能体（Multi-Agent）协作，基于 LangGraph 编排
 - 形态：AI 深度研究系统（Deep Research），支持 SSE 流式输出与断点续跑（checkpoint/resume）
 - 工作流：信息收集 → 数据分析 → 报告撰写
+
+---
+
+# Git 协作规范（强约束）
+
+## 核心规则
+- **R1** 禁止直接 push 到 `main`；所有变更走 feature branch + PR
+- **R2** PR 由用户合并，Claude 不自行合并
+- **R3** 禁止 force push 到共享分支
+- **R4** 禁止 `--no-verify`、`--amend` 已推送的 commit、`reset --hard`、`branch -D` 等破坏性操作（除非用户当次明确授权）
+
+## 分支与提交
+- 分支名 `<type>/<short-desc>`，type ∈ {feat, fix, docs, chore, refactor, test, perf, ci, build, hotfix}
+- 提交遵循 Conventional Commits：`<type>(<scope>): <subject>`，subject 祈使句、小写起头、≤72 字符
+- 一个 commit 一个逻辑变更；合并前 squash 清理 wip
+
+## PR 规范
+- 标题与首个 commit 同风格
+- 描述含三段：`## Summary` / `## Changes` / `## Test plan`
+- 目标 ≤400 行变更，超 800 行需在描述里说明原因
+- 合并策略默认 **Squash and merge**
+
+## Claude 工作流速查
+开工：`git switch main && git pull && git switch -c <type>/<desc>`
+完工：`git add <files>` → `git commit -m "..."` → `git push -u origin <branch>` → `gh pr create --body-file <tmp>`
+
+绝不：`git push origin main`、`git push --force` 共享分支、`git commit --amend` 已推送 commit、直接编辑 main。
+
+## 紧急绕行
+用户当次明确要求绕过时：复述确认 → 执行 → 在回复中标注"按你要求绕过 Rx"。
