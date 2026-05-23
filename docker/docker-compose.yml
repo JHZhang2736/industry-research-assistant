@@ -139,33 +139,33 @@ services:
 
   # ---------------- Attu (Milvus 可视化, 可选) ----------------
   # 启动方式: docker compose --profile ui up -d
-  attu:
-    image: zilliz/attu:v2.4.12
-    container_name: ira-attu
-    restart: unless-stopped
-    profiles: ["ui"]
-    environment:
-      MILVUS_URL: milvus:19530
-    ports:
-      - "${ATTU_PORT:-8001}:3000"
-    networks:
-      - deepresearch
-    depends_on:
-      - milvus
+  # attu:
+  #   image: zilliz/attu:v2.4.12
+  #   container_name: ira-attu
+  #   restart: unless-stopped
+  #   profiles: ["ui"]
+  #   environment:
+  #     MILVUS_URL: milvus:19530
+  #   ports:
+  #     - "${ATTU_PORT:-8001}:3000"
+  #   networks:
+  #     - deepresearch
+  #   depends_on:
+  #     - milvus
 
   # ---------------- pgAdmin (PG 可视化, 可选) ----------------
-  pgadmin:
-    image: dpage/pgadmin4:8
-    container_name: ira-pgadmin
-    restart: unless-stopped
-    profiles: ["ui"]
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local.dev}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-deepresearch}
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    ports:
-      - "${PGADMIN_PORT:-5050}:80"
-    networks:
-      - deepresearch
-    depends_on:
-      - postgres
+  # pgadmin:
+  #   image: dpage/pgadmin4:8
+  #   container_name: ira-pgadmin
+  #   restart: unless-stopped
+  #   profiles: ["ui"]
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@local.dev}
+  #     PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-deepresearch}
+  #     PGADMIN_CONFIG_SERVER_MODE: "False"
+  #   ports:
+  #     - "${PGADMIN_PORT:-5050}:80"
+  #   networks:
+  #     - deepresearch
+  #   depends_on:
+  #     - postgres
