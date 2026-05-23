@@ -21,10 +21,10 @@
 | API 网关 | FastAPI（SSE 流式输出 / checkpoint 断点续跑） |
 | 多智能体编排 | LangGraph |
 | 辅助服务 | Text2SQL、新闻采集（定时任务）、知识库管理（向量检索） |
-| 关系型数据库 | PostgreSQL / MySQL |
+| 关系型数据库 | PostgreSQL（LangGraph 官方 checkpointer 支持） |
 | 向量数据库 | Milvus |
 | 缓存 | Redis |
-| 文件存储 | MinIO / 本地 FS |
+| 文件存储 | MinIO（兼任 Milvus 后端） |
 
 ## 目录结构
 
@@ -43,9 +43,11 @@
 > 项目处于早期开发阶段，相关命令将随各层落地陆续补充。
 
 ```bash
-# 1. 启动中间件（PostgreSQL / Redis / Milvus）
+# 1. 启动中间件（PostgreSQL / Redis / Milvus + etcd + MinIO）
 cd docker
+cp .env.example .env
 docker compose up -d
+# 详见 docker/README.md
 
 # 2. 启动后端
 cd ../backend
@@ -58,7 +60,7 @@ cd ../frontend
 
 ## 开发路线
 
-- [ ] Docker 中间件编排（PostgreSQL / Redis / Milvus + etcd + MinIO）
+- [x] Docker 中间件编排（PostgreSQL / Redis / Milvus + etcd + MinIO）
 - [ ] 后端脚手架（FastAPI + 配置 + 日志 + DB 连接）
 - [ ] LLM 接入抽象层
 - [ ] 工具集（Web 搜索、网页抓取、文档解析）

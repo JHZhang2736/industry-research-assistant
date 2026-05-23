@@ -52,10 +52,10 @@ React 18 + TypeScript + Ant Design + ECharts + Recharts + react-markdown + Zusta
   - 知识库管理（向量检索）
 
 ### 数据存储层
-- **关系型数据库**：PostgreSQL / MySQL（业务数据、会话、用户）
+- **关系型数据库**：PostgreSQL（业务数据、会话、用户；LangGraph 官方 PostgresSaver 提供 checkpoint 持久化）
 - **向量数据库**：Milvus（知识库向量检索）
 - **缓存**：Redis（会话、限流、热点数据）
-- **文件存储**：File Storage（原始文档、报告产物）
+- **对象存储**：MinIO（原始文档、报告产物；同时作为 Milvus 的 S3 后端）
 
 ## 技术特征
 - 架构：多智能体（Multi-Agent）协作，基于 LangGraph 编排
