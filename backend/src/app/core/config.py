@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = Field(default=8000, ge=1, le=65535)
 
+    database_url: str = Field(
+        default="postgresql+asyncpg://deepresearch:deepresearch@localhost:5432/deepresearch",
+        description="SQLAlchemy async DSN，必须使用 postgresql+asyncpg 驱动。",
+    )
+    db_echo: bool = False
+    db_pool_size: int = Field(default=10, ge=1, le=100)
+    db_max_overflow: int = Field(default=20, ge=0, le=200)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -72,14 +72,18 @@ React 18 + TypeScript + Ant Design + ECharts + Recharts + react-markdown + Zusta
 - **R3** 禁止 force push 到共享分支
 - **R4** 禁止 `--no-verify`、`--amend` 已推送的 commit、`reset --hard`、`branch -D` 等破坏性操作（除非用户当次明确授权）
 
+## 语言
+- **commit message、PR 标题、PR 正文统一使用中文**（代码、标识符、注释依旧英文）
+- conventional commits 的 type（feat/fix/chore/...）保留英文
+
 ## 分支与提交
 - 分支名 `<type>/<short-desc>`，type ∈ {feat, fix, docs, chore, refactor, test, perf, ci, build, hotfix}
-- 提交遵循 Conventional Commits：`<type>(<scope>): <subject>`，subject 祈使句、小写起头、≤72 字符
+- 提交遵循 Conventional Commits：`<type>(<scope>): <中文 subject>`，subject 祈使句、≤72 字符
 - 一个 commit 一个逻辑变更；合并前 squash 清理 wip
 
 ## PR 规范
 - 标题与首个 commit 同风格
-- 描述含三段：`## Summary` / `## Changes` / `## Test plan`
+- 描述含三段：`## 摘要` / `## 变更` / `## 测试计划`
 - 目标 ≤400 行变更，超 800 行需在描述里说明原因
 - 合并策略默认 **Squash and merge**
 

@@ -14,6 +14,9 @@ dependencies = [
     "pydantic-settings>=2.6",
     "structlog>=24.4",
     "python-dotenv>=1.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
 ]
 
 [dependency-groups]
@@ -50,7 +53,12 @@ select = [
     "SIM",           # flake8-simplify
     "RUF",           # ruff-specific
 ]
-ignore = ["E501"]    # line length handled by formatter
+ignore = [
+    "E501",              # line length handled by formatter
+    "RUF001",            # 允许中文全角标点（项目注释/文档以中文为主）
+    "RUF002",
+    "RUF003",
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -65,6 +73,10 @@ files = ["src"]
 
 [[tool.mypy.overrides]]
 module = ["structlog.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["alembic.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
