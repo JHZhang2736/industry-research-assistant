@@ -29,6 +29,33 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=10, ge=1, le=100)
     db_max_overflow: int = Field(default=20, ge=0, le=200)
 
+    redis_url: str = Field(
+        default="redis://:deepresearch@localhost:6379/0",
+        description="Redis DSN，含密码。格式：redis://[:password]@host:port/db",
+    )
+    redis_max_connections: int = Field(default=50, ge=1, le=500)
+
+    milvus_uri: str = Field(
+        default="http://localhost:19530",
+        description="Milvus 服务地址。pymilvus 2.5 推荐使用 URI 形式。",
+    )
+    milvus_token: str | None = Field(
+        default=None,
+        description="Milvus 鉴权 token（自建无鉴权可留空；Zilliz Cloud 必填）。",
+    )
+    milvus_db: str = Field(default="default", description="Milvus 数据库名（多租户隔离）。")
+
+    minio_endpoint: str = Field(
+        default="localhost:9000",
+        description="MinIO 服务地址（host:port，不带 scheme）。",
+    )
+    minio_access_key: str = Field(default="minioadmin")
+    minio_secret_key: str = Field(default="minioadmin")
+    minio_secure: bool = Field(default=False, description="是否走 HTTPS。本地 dev 通常 false。")
+    minio_region: str = Field(
+        default="us-east-1", description="S3 协议要求字段，MinIO 任意值即可。"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
