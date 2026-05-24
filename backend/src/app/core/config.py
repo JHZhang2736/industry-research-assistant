@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,26 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = Field(default=8000, ge=1, le=65535)
+
+    cors_origins: list[str] = Field(
+        default=[
+            "http://localhost:5183",
+            "http://127.0.0.1:5183",
+        ],
+        description="允许跨域请求的 Origin 白名单。env 中用逗号分隔多个值。",
+    )
+    cors_allow_credentials: bool = Field(
+        default=True,
+        description="是否允许携带 cookie/Authorization。生产建议明确白名单后保持 True。",
+    )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v: object) -> object:
+        """允许 env 用逗号分隔传入，提升可读性（默认 pydantic 期待 JSON）。"""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
     database_url: str = Field(
         default="postgresql+asyncpg://deepresearch:deepresearch@localhost:5432/deepresearch",
