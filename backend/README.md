@@ -13,6 +13,9 @@ FastAPI 后端，多智能体编排引擎运行在此层。本文档说明本地
 | 日志 | structlog |
 | ORM | SQLAlchemy 2.x (async) + asyncpg |
 | 迁移 | Alembic |
+| 缓存 | redis (redis-py asyncio) |
+| 向量库 | Milvus (pymilvus) |
+| 对象存储 | MinIO (minio-py) |
 | 测试 | pytest + httpx |
 | Lint / Format / Type | ruff + mypy |
 
@@ -34,13 +37,19 @@ backend/
 │   ├── db/
 │   │   ├── base.py             # DeclarativeBase
 │   │   └── session.py          # async engine + sessionmaker + get_db 依赖
+│   ├── cache/
+│   │   └── redis.py            # redis.asyncio 连接池 + get_redis 依赖
+│   ├── vectorstore/
+│   │   └── milvus.py           # MilvusClient 单例 + ping 探活
+│   ├── storage/
+│   │   └── minio_client.py     # MinIO 单例 + ping 探活
 │   ├── models/                 # ORM 模型（每张表一个类）
 │   │   ├── user.py
 │   │   ├── chat.py
 │   │   ├── knowledge.py
 │   │   └── memory.py
 │   └── api/
-│       └── health.py           # /health 端点（带 db 探活）
+│       └── health.py           # /health 端点（db/redis/milvus/minio 全探活）
 ├── tests/
 ├── .env.example
 └── README.md
@@ -71,12 +80,16 @@ uv sync              # 创建 .venv 并安装运行时 + dev 依赖
 cp .env.example .env
 ```
 
-### 4. 起 PostgreSQL（首次）
+### 4. 起中间件（首次）
 
 ```bash
 cd ../docker
-docker compose up -d postgres
+docker compose up -d         # postgres / redis / milvus(+etcd+minio)
 ```
+
+> 本项目 docker-compose 实际部署在云服务器，本机通过 SSH 端口转发访问。
+> 即使本机没有 Docker，只要端口（5432/6379/9000/9001/19530/9091）已转发到 localhost，
+> 后端就能直接使用，无需改 host。
 
 ## 数据库：升级与日常操作
 
@@ -207,17 +220,93 @@ await db.delete(user)
 await db.commit()
 ```
 
+## 中间件：在代码里使用
+
+### Redis（按请求依赖）
+
+```python
+from fastapi import APIRouter, Depends
+from redis.asyncio import Redis
+
+from app.cache.redis import get_redis
+
+router = APIRouter()
+
+
+@router.get("/counter")
+async def incr(redis: Redis = Depends(get_redis)) -> dict:
+    n = await redis.incr("visits")
+    return {"visits": n}
+```
+
+要点：
+- `get_redis` 从全局连接池借一个客户端句柄，请求结束后归还，**不需要业务代码 close**
+- 默认 `decode_responses=True`，返回 str；存二进制（如 pickle/protobuf）需另开一个 pool
+- 命令名与 redis-cli 一致：`get/set/incr/expire/hset/zadd/...`，全部 await
+
+### Milvus（进程级单例）
+
+```python
+from app.vectorstore.milvus import get_milvus
+
+client = get_milvus()
+client.create_collection("docs", dimension=1536, metric_type="COSINE")
+client.insert("docs", data=[{"id": 1, "vector": [...], "text": "..."}])
+hits = client.search("docs", data=[query_vector], limit=5)
+```
+
+要点：
+- `MilvusClient` 是同步 SDK，在异步路由里需要 `await asyncio.to_thread(client.search, ...)`
+  包装，避免阻塞事件循环
+- 集合（collection）≈ 关系库的表；schema 通过 dimension/metric_type 等参数声明
+- 索引建议在数据导入后批量构建，而不是每次 insert
+
+### MinIO（进程级单例）
+
+```python
+import io
+
+from app.storage.minio_client import get_minio
+
+minio = get_minio()
+if not minio.bucket_exists("reports"):
+    minio.make_bucket("reports")
+minio.put_object("reports", "2026/05/r1.md", io.BytesIO(b"# hello"), length=7)
+obj = minio.get_object("reports", "2026/05/r1.md")
+content = obj.read()
+```
+
+要点：
+- MinIO 走 S3 协议，对象 key 用 `/` 模拟目录层级
+- minio-py 同样是同步 SDK，异步路由里同样用 `asyncio.to_thread` 包装
+- bucket 命名遵循 S3 规则：小写字母、数字、连字符；初始化通常在业务启动逻辑里做
+
 ## 启动应用
 
 ```bash
 # 开发模式（热重载）
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-# 验证：DB 通时 status=ok，断 DB 时 status=degraded（HTTP 仍 200）
+# 验证：所有中间件通时 status=ok；任一不可达 status=degraded（HTTP 仍 200）
 curl http://localhost:8000/health
 
 # OpenAPI 文档
 # http://localhost:8000/docs
+```
+
+`/health` 返回结构示例：
+
+```json
+{
+  "status": "ok",
+  "app": "industry-research-assistant",
+  "env": "dev",
+  "version": "0.1.0",
+  "db":     {"status": "ok", "detail": null},
+  "redis":  {"status": "ok", "detail": null},
+  "milvus": {"status": "ok", "detail": "v2.4.17"},
+  "minio":  {"status": "ok", "detail": "buckets=0"}
+}
 ```
 
 ## 常用命令
@@ -232,5 +321,5 @@ uv run alembic upgrade head    # 升级到最新 schema
 
 ## 下一个 PR 计划
 
-- Redis / Milvus / MinIO 客户端封装
-- `/health` 增加 redis / milvus / minio 探活字段
+- 认证 / 用户模块（`/auth/register` `/auth/login` `/auth/me`）
+- Repository 层抽象（替代裸 ORM 操作）

@@ -101,10 +101,11 @@ docker/data/
 *.pid
 
 # ===== Project artifacts =====
-uploads/
-storage/
-tmp/
-temp/
+# 限定为仓库根级目录，避免误伤 backend/src/app/storage/ 等业务代码目录
+/uploads/
+/storage/
+/tmp/
+/temp/
 *.sqlite
 *.sqlite3
 *.db

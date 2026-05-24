@@ -17,6 +17,9 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.36",
     "asyncpg>=0.30",
     "alembic>=1.14",
+    "redis[hiredis]>=5.2",
+    "pymilvus>=2.5",
+    "minio>=7.2",
 ]
 
 [dependency-groups]
@@ -77,6 +80,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["alembic.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pymilvus.*", "minio.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
