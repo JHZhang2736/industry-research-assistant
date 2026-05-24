@@ -56,6 +56,25 @@ class Settings(BaseSettings):
         default="us-east-1", description="S3 协议要求字段，MinIO 任意值即可。"
     )
 
+    jwt_secret_key: str = Field(
+        default="CHANGE_ME_TO_RANDOM_64_BYTES_USE_openssl_rand_hex_32",
+        description="JWT 签名密钥。生产环境必须替换为高熵随机串（如 `openssl rand -hex 32`）。",
+        min_length=32,
+    )
+    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
+    jwt_access_ttl_minutes: int = Field(
+        default=60 * 24 * 7,
+        ge=1,
+        le=60 * 24 * 30,
+        description="Access token 有效期（分钟）。默认 7 天。",
+    )
+    bcrypt_rounds: int = Field(
+        default=12,
+        ge=4,
+        le=15,
+        description="bcrypt cost factor。默认 12（≈250ms/次）。测试环境可调低到 4 加速。",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api.health import router as health_router
+from app.auth.router import router as auth_router
 from app.cache.redis import dispose_redis
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health_router)
+    app.include_router(auth_router)
     return app
 
 

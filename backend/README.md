@@ -16,6 +16,7 @@ FastAPI 后端，多智能体编排引擎运行在此层。本文档说明本地
 | 缓存 | redis (redis-py asyncio) |
 | 向量库 | Milvus (pymilvus) |
 | 对象存储 | MinIO (minio-py) |
+| 认证 | bcrypt + PyJWT (HS256) |
 | 测试 | pytest + httpx |
 | Lint / Format / Type | ruff + mypy |
 
@@ -48,6 +49,12 @@ backend/
 │   │   ├── chat.py
 │   │   ├── knowledge.py
 │   │   └── memory.py
+│   ├── auth/                   # 认证模块
+│   │   ├── schemas.py          # 入参/出参 Pydantic 模型
+│   │   ├── security.py         # bcrypt 哈希 + JWT 编解码
+│   │   ├── service.py          # register / authenticate / get_user_by_id
+│   │   ├── dependencies.py     # get_current_user / get_current_active_user
+│   │   └── router.py           # /auth/register /login /me
 │   └── api/
 │       └── health.py           # /health 端点（db/redis/milvus/minio 全探活）
 ├── tests/
@@ -281,6 +288,76 @@ content = obj.read()
 - minio-py 同样是同步 SDK，异步路由里同样用 `asyncio.to_thread` 包装
 - bucket 命名遵循 S3 规则：小写字母、数字、连字符；初始化通常在业务启动逻辑里做
 
+## 认证：注册 / 登录 / 当前用户
+
+### 1. 生成 JWT secret（首次部署必做）
+
+`.env.example` 里的 `JWT_SECRET_KEY` 是占位符，**生产/测试环境**必须替换为高熵随机串：
+
+```bash
+openssl rand -hex 32     # 输出形如 a3f5e8...，复制到 .env
+```
+
+### 2. API 概览
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | `/auth/register` | 公开 | 注册并返回 access token |
+| POST | `/auth/login` | 公开 | 用户名或邮箱 + 密码登录 |
+| GET | `/auth/me` | Bearer | 获取当前登录用户信息 |
+
+入参约束：
+- `username`：3-50 字符，仅字母/数字/`_`/`-`；存储与比对都 lower case
+- `email`：标准邮箱格式（pydantic `EmailStr`），lower case 存储
+- `password`：8-128 字符，必须**同时**包含字母和数字
+- 登录时 `account` 字段可以是 username 也可以是 email
+
+### 3. curl 示例
+
+```bash
+# 注册
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","email":"alice@x.io","password":"Passw0rd!"}'
+
+# 登录
+curl -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"account":"alice","password":"Passw0rd!"}'
+
+# 拿当前用户
+TOKEN=eyJhbGciOi...    # 从上一步响应里取
+curl http://localhost:8000/auth/me \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 4. 在业务路由里拿到当前用户
+
+```python
+from fastapi import APIRouter
+from app.auth.dependencies import ActiveUserDep
+from app.models.user import User
+
+router = APIRouter()
+
+
+@router.get("/my-stuff")
+async def my_stuff(user: ActiveUserDep) -> dict:
+    return {"user_id": str(user.id), "username": user.username}
+```
+
+- `ActiveUserDep` 是 `Annotated[User, Depends(get_current_active_user)]` 的别名
+- 路由会自动校验 Bearer token + 用户存在 + `is_active=True`
+- 失败时框架直接返 401/403，业务代码无需关心
+
+### 5. 安全设计要点
+
+- **失败响应统一化**：登录失败统一返回"账号或密码错误"，不区分"用户不存在"vs"密码错"，**防用户名枚举**
+- **时序攻击防御**：即使账号不存在，service 层也会跑一次 `verify_password` 让响应时间趋近"密码错"的情况
+- **密码字段不外泄**：`UserOut` schema 不含 `hashed_password`；日志里也不打密码
+- **bcrypt 自带恒定时间比较**：`verify_password` 用 `bcrypt.checkpw`，天然抗时序攻击
+- **JWT typ 字段**：claims 里固定 `"typ":"access"`，decode 时校验，为后续 refresh token 预留差异化
+
 ## 启动应用
 
 ```bash
@@ -321,5 +398,6 @@ uv run alembic upgrade head    # 升级到最新 schema
 
 ## 下一个 PR 计划
 
-- 认证 / 用户模块（`/auth/register` `/auth/login` `/auth/me`）
-- Repository 层抽象（替代裸 ORM 操作）
+- Refresh token / token 撤销机制（Redis 黑名单或纯 JWT 轮转）
+- 基于 Redis 的全局限流中间件（防爆破 `/auth/login`）
+- Repository 层抽象（替代路由层直接 ORM）
