@@ -20,6 +20,9 @@ dependencies = [
     "redis[hiredis]>=5.2",
     "pymilvus>=2.5",
     "minio>=7.2",
+    "bcrypt>=4.2",
+    "pyjwt>=2.10",
+    "email-validator>=2.2",
 ]
 
 [dependency-groups]
