@@ -75,3 +75,11 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
             yield ac
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+@pytest_asyncio.fixture
+async def anon_client() -> AsyncIterator[AsyncClient]:
+    """轻量 ASGI 客户端：不挂 DB 依赖，用于纯中间件 / 协议层测试（如 CORS、错误处理）。"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac

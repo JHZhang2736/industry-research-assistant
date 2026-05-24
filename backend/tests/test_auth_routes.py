@@ -40,9 +40,7 @@ async def test_register_success(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_register_duplicate_username(client: AsyncClient) -> None:
     await client.post("/auth/register", json=_register_payload())
-    resp = await client.post(
-        "/auth/register", json=_register_payload(email="alice2@example.com")
-    )
+    resp = await client.post("/auth/register", json=_register_payload(email="alice2@example.com"))
     assert resp.status_code == 409
 
 
@@ -55,9 +53,7 @@ async def test_register_duplicate_email(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_register_weak_password(client: AsyncClient) -> None:
-    resp = await client.post(
-        "/auth/register", json=_register_payload(password="alllettersnodigit")
-    )
+    resp = await client.post("/auth/register", json=_register_payload(password="alllettersnodigit"))
     assert resp.status_code == 422
 
 
