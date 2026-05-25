@@ -244,6 +244,11 @@ class BaseAgent(ABC):
         3. 都没有：仅追加到 state["messages"]（如 run_sync 单元测试）
 
         无论哪条路径，都会追加到 state["messages"] 以便日志/检查点保留事件历史。
+
+        Args:
+            state: 研究状态
+            event_type: 事件类型
+            content: 消息内容
         """
         message = {
             "type": event_type,
@@ -260,9 +265,10 @@ class BaseAgent(ABC):
             writer(message)
             self.logger.debug(f"[stream_writer] Pushed event: {event_type}")
             return
-        except (ImportError, RuntimeError):
+        except (ImportError, RuntimeError, KeyError):
             # ImportError: langgraph 不可用（不应该发生，requirements 已强制）
             # RuntimeError: 不在 graph 执行上下文中
+            # KeyError: 在非 pregel 的 RunnableConfig 上下文中（如 LCEL 测试）
             pass
 
         # 路径 2：旧的消息队列（_run_simplified 兼容）
@@ -273,9 +279,9 @@ class BaseAgent(ABC):
                 return
             except Exception as e:
                 self.logger.warning(f"Failed to push message to queue: {e}")
-
-        # 路径 3：什么都没有，仅记录
-        self.logger.debug(f"[no-sink] Event recorded only in state.messages: {event_type}")
+        else:
+            # 路径 3：什么都没有，仅记录
+            self.logger.debug(f"[no-sink] Event recorded only in state.messages: {event_type}")
 
     def add_log(
         self,
