@@ -1,403 +1,81 @@
-# Backend — Industry Research Assistant
-
-FastAPI 后端，多智能体编排引擎运行在此层。本文档说明本地开发环境、启动方式与数据库操作指南。
-
-## 技术栈
-
-| 项 | 选型 |
-|----|------|
-| Python | 3.12 |
-| 包管理 | [uv](https://github.com/astral-sh/uv) |
-| Web 框架 | FastAPI + Uvicorn |
-| 配置 | pydantic-settings |
-| 日志 | structlog |
-| ORM | SQLAlchemy 2.x (async) + asyncpg |
-| 迁移 | Alembic |
-| 缓存 | redis (redis-py asyncio) |
-| 向量库 | Milvus (pymilvus) |
-| 对象存储 | MinIO (minio-py) |
-| 认证 | bcrypt + PyJWT (HS256) |
-| 测试 | pytest + httpx |
-| Lint / Format / Type | ruff + mypy |
-
-## 目录结构
-
-```
-backend/
-├── pyproject.toml              # 依赖、ruff、mypy、pytest 配置
-├── alembic.ini                 # Alembic 配置
-├── alembic/
-│   ├── env.py                  # 异步迁移环境（从 app.core.config 注入 DSN）
-│   ├── script.py.mako          # 迁移文件模板
-│   └── versions/               # 迁移版本文件
-├── src/app/
-│   ├── main.py                 # FastAPI 实例与 lifespan
-│   ├── core/
-│   │   ├── config.py           # 配置（pydantic-settings）
-│   │   └── logging.py          # structlog 配置
-│   ├── db/
-│   │   ├── base.py             # DeclarativeBase
-│   │   └── session.py          # async engine + sessionmaker + get_db 依赖
-│   ├── cache/
-│   │   └── redis.py            # redis.asyncio 连接池 + get_redis 依赖
-│   ├── vectorstore/
-│   │   └── milvus.py           # MilvusClient 单例 + ping 探活
-│   ├── storage/
-│   │   └── minio_client.py     # MinIO 单例 + ping 探活
-│   ├── models/                 # ORM 模型（每张表一个类）
-│   │   ├── user.py
-│   │   ├── chat.py
-│   │   ├── knowledge.py
-│   │   └── memory.py
-│   ├── auth/                   # 认证模块
-│   │   ├── schemas.py          # 入参/出参 Pydantic 模型
-│   │   ├── security.py         # bcrypt 哈希 + JWT 编解码
-│   │   ├── service.py          # register / authenticate / get_user_by_id
-│   │   ├── dependencies.py     # get_current_user / get_current_active_user
-│   │   └── router.py           # /auth/register /login /me
-│   └── api/
-│       └── health.py           # /health 端点（db/redis/milvus/minio 全探活）
-├── tests/
-├── .env.example
-└── README.md
-```
-
-## 准备环境
-
-### 1. 安装 uv
-
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-### 2. 安装依赖
-
-```bash
+# 项目启动
+## 启动中间件
 cd backend
-uv sync              # 创建 .venv 并安装运行时 + dev 依赖
+docker compose -f docker-compose-base.yml up -d
+
+### 查看中间件状态
+```sh
+$ docker ps
+CONTAINER ID   IMAGE                                    COMMAND                  CREATED          STATUS                             PORTS                              NAMES
+...            redis:7-alpine                           "docker-entrypoint.s…"   ...              Up                                 0.0.0.0:6379->6379/tcp             document-redis
+...            milvusdb/milvus:v2.3.3                   "milvus run standalo…"   ...              Up                                 0.0.0.0:19530->19530/tcp           milvus-standalone
+...            minio/minio:RELEASE.2023-03-20T20-16-18Z "minio server /minio…"   ...              Up                                 0.0.0.0:9000-9001->9000-9001/tcp   milvus-minio
+...            quay.io/coreos/etcd:v3.5.5               "etcd -advertise-cli…"   ...              Up                                                                    milvus-etcd
 ```
 
-### 3. 复制环境变量
+## 安装python依赖包
+pip install -r requirements.txt
 
-```bash
-cp .env.example .env
+## 修改env文件
+填入个人的DASHSCOPE_API_KEY，SERPER_API_KEY
+SERPER_API_KEY获取方法参考：https://serper.dev/
+
+配置 Milvus 连接（可选，默认 localhost:19530）：
+```
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
 ```
 
-### 4. 起中间件（首次）
-
-```bash
-cd ../docker
-docker compose up -d         # postgres / redis / milvus(+etcd+minio)
+配置 DocMind 文档解析服务：
+```
+DOCMIND_ACCESS_KEY_ID=your_access_key_id
+DOCMIND_ACCESS_KEY_SECRET=your_access_key_secret
 ```
 
-> 本项目 docker-compose 实际部署在云服务器，本机通过 SSH 端口转发访问。
-> 即使本机没有 Docker，只要端口（5432/6379/9000/9001/19530/9091）已转发到 localhost，
-> 后端就能直接使用，无需改 host。
+# 临时添加环境变量
+# 用您的百炼API Key代替YOUR_DASHSCOPE_API_KEY
+export DASHSCOPE_API_KEY="YOUR_DASHSCOPE_API_KEY"
 
-## 数据库：升级与日常操作
+## 启动后端服务
+python app/app_main.py
 
-### 一、初始化（首次拉代码或库为空时）
 
-```bash
+# 接口测试
+### 上传文档,用于本地知识库的查询
+```sh
 cd backend
-uv run alembic upgrade head
+curl -X POST "http://localhost:8000/documents/upload"   -H "Content-Type: multipart/form-data"   -F "file=@./test/test_doc.pdf"
+
+{"status":"success","message":"成功处理 25 个切片","document_count":25}
 ```
 
-执行后 PG 中会出现 6 张业务表（`users` / `chat_sessions` / `chat_messages` /
-`knowledge_bases` / `documents` / `long_term_memories`），以及触发器
-`update_updated_at_column` 与 `alembic_version` 版本记录表。
+### 创建会话
+```sh
+curl -s -X POST http://localhost:8000/chat/session
 
-### 二、查看当前迁移状态
-
-```bash
-uv run alembic current              # 当前数据库 head
-uv run alembic history --verbose    # 全部迁移版本
-uv run alembic heads                # 代码侧的 head（与 current 对齐才算同步）
+{"session_id":"02c32f19-b7f0-42ea-b3c1-7d2bc148c21b","created_at":1751194296,"updated_at":1751194296,"message_count":0}
 ```
 
-### 三、新增 / 修改 schema 的标准流程
-
-1. **改 ORM 模型**：在 `src/app/models/` 下新增字段、新建模型类或修改约束
-2. **自动生成迁移**：
-
-   ```bash
-   uv run alembic revision --autogenerate -m "<简短中文描述>"
-   ```
-
-   Alembic 会 diff "ORM metadata" 与 "当前数据库 schema"，把差异写入
-   `alembic/versions/<timestamp>_xxx.py`
-3. **审阅生成结果**：autogenerate 不是万能（无法识别列重命名、约束类型变化），
-   打开文件检查 `upgrade()` / `downgrade()` 是否符合预期，必要时手改
-4. **应用到数据库**：
-
-   ```bash
-   uv run alembic upgrade head
-   ```
-
-5. **提交**：迁移文件**必须随业务代码一起进 git**
-
-### 四、回滚
-
-```bash
-uv run alembic downgrade -1            # 回滚一步
-uv run alembic downgrade <revision>    # 回滚到指定版本
-uv run alembic downgrade base          # 清空到无迁移状态（慎用，会丢业务数据）
-```
-
-### 五、生成 SQL 而不执行（用于线上审阅）
-
-```bash
-uv run alembic upgrade head --sql > upgrade.sql
-```
-
-## 在代码里操作数据库
-
-### 路由层：通过依赖注入拿 session
-
-```python
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.db.session import get_db
-from app.models.user import User
-
-router = APIRouter()
-
-
-@router.get("/users")
-async def list_users(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    stmt = select(User).order_by(User.created_at.desc()).limit(20)
-    result = await db.execute(stmt)
-    users = result.scalars().all()
-    return [{"id": str(u.id), "email": u.email} for u in users]
-
-
-@router.post("/users")
-async def create_user(email: str, db: AsyncSession = Depends(get_db)) -> dict:
-    user = User(username=email.split("@")[0], email=email, hashed_password="...")
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    return {"id": str(user.id)}
-```
-
-要点：
-- `get_db` 是按请求创建一个 `AsyncSession`，请求结束自动关闭
-- **写操作要显式 `await db.commit()`**，否则不会落盘
-- `await db.refresh(obj)` 把数据库填回的字段（PK、`server_default`）刷到对象上
-
-### 非路由场景（脚本、后台任务）：手动开 session
-
-```python
-from app.db.session import async_session_factory
-
-async def some_job() -> None:
-    session_factory = async_session_factory()
-    async with session_factory() as db:
-        async with db.begin():
-            ...  # 事务里做事，退出 with 自动 commit；抛异常自动 rollback
-```
-
-### 常见查询模式
-
-```python
-# 按主键拿
-user = await db.get(User, user_id)
-
-# 条件查询
-stmt = select(User).where(User.email == "x@y.com")
-user = (await db.execute(stmt)).scalar_one_or_none()
-
-# 分页 + 排序
-stmt = select(ChatSession).where(ChatSession.user_id == uid)\
-    .order_by(ChatSession.created_at.desc()).limit(20).offset(40)
-sessions = (await db.execute(stmt)).scalars().all()
-
-# 更新
-user.is_active = False
-await db.commit()
-
-# 删除
-await db.delete(user)
-await db.commit()
-```
-
-## 中间件：在代码里使用
-
-### Redis（按请求依赖）
-
-```python
-from fastapi import APIRouter, Depends
-from redis.asyncio import Redis
-
-from app.cache.redis import get_redis
-
-router = APIRouter()
-
-
-@router.get("/counter")
-async def incr(redis: Redis = Depends(get_redis)) -> dict:
-    n = await redis.incr("visits")
-    return {"visits": n}
-```
-
-要点：
-- `get_redis` 从全局连接池借一个客户端句柄，请求结束后归还，**不需要业务代码 close**
-- 默认 `decode_responses=True`，返回 str；存二进制（如 pickle/protobuf）需另开一个 pool
-- 命令名与 redis-cli 一致：`get/set/incr/expire/hset/zadd/...`，全部 await
-
-### Milvus（进程级单例）
-
-```python
-from app.vectorstore.milvus import get_milvus
-
-client = get_milvus()
-client.create_collection("docs", dimension=1536, metric_type="COSINE")
-client.insert("docs", data=[{"id": 1, "vector": [...], "text": "..."}])
-hits = client.search("docs", data=[query_vector], limit=5)
-```
-
-要点：
-- `MilvusClient` 是同步 SDK，在异步路由里需要 `await asyncio.to_thread(client.search, ...)`
-  包装，避免阻塞事件循环
-- 集合（collection）≈ 关系库的表；schema 通过 dimension/metric_type 等参数声明
-- 索引建议在数据导入后批量构建，而不是每次 insert
-
-### MinIO（进程级单例）
-
-```python
-import io
-
-from app.storage.minio_client import get_minio
-
-minio = get_minio()
-if not minio.bucket_exists("reports"):
-    minio.make_bucket("reports")
-minio.put_object("reports", "2026/05/r1.md", io.BytesIO(b"# hello"), length=7)
-obj = minio.get_object("reports", "2026/05/r1.md")
-content = obj.read()
-```
-
-要点：
-- MinIO 走 S3 协议，对象 key 用 `/` 模拟目录层级
-- minio-py 同样是同步 SDK，异步路由里同样用 `asyncio.to_thread` 包装
-- bucket 命名遵循 S3 规则：小写字母、数字、连字符；初始化通常在业务启动逻辑里做
-
-## 认证：注册 / 登录 / 当前用户
-
-### 1. 生成 JWT secret（首次部署必做）
-
-`.env.example` 里的 `JWT_SECRET_KEY` 是占位符，**生产/测试环境**必须替换为高熵随机串：
-
-```bash
-openssl rand -hex 32     # 输出形如 a3f5e8...，复制到 .env
-```
-
-### 2. API 概览
-
-| 方法 | 路径 | 鉴权 | 说明 |
-|------|------|------|------|
-| POST | `/auth/register` | 公开 | 注册并返回 access token |
-| POST | `/auth/login` | 公开 | 用户名或邮箱 + 密码登录 |
-| GET | `/auth/me` | Bearer | 获取当前登录用户信息 |
-
-入参约束：
-- `username`：3-50 字符，仅字母/数字/`_`/`-`；存储与比对都 lower case
-- `email`：标准邮箱格式（pydantic `EmailStr`），lower case 存储
-- `password`：8-128 字符，必须**同时**包含字母和数字
-- 登录时 `account` 字段可以是 username 也可以是 email
-
-### 3. curl 示例
-
-```bash
-# 注册
-curl -X POST http://localhost:8000/auth/register \
+### 问答
+```sh
+curl -N -X POST http://localhost:8000/chat/completion \
   -H "Content-Type: application/json" \
-  -d '{"username":"alice","email":"alice@x.io","password":"Passw0rd!"}'
+  -H "Accept: text/event-stream" \
+  -d "{
+    \"session_id\": \"02c32f19-b7f0-42ea-b3c1-7d2bc148c21b\",
+    \"question\": \"如何解决dify_setups表不存在的问题？\"
+  }"
 
-# 登录
-curl -X POST http://localhost:8000/auth/login \
+```
+
+
+### deepseach
+```sh
+curl -N -X POST "http://localhost:8000/research/stream" \
   -H "Content-Type: application/json" \
-  -d '{"account":"alice","password":"Passw0rd!"}'
+  -d '{
+    "query": "安责险在矿山行业的应用现状、面临的主要挑战以及改进建议有哪些？",
+    "max_iterations": 2
+  }'
 
-# 拿当前用户
-TOKEN=eyJhbGciOi...    # 从上一步响应里取
-curl http://localhost:8000/auth/me \
-  -H "Authorization: Bearer $TOKEN"
 ```
-
-### 4. 在业务路由里拿到当前用户
-
-```python
-from fastapi import APIRouter
-from app.auth.dependencies import ActiveUserDep
-from app.models.user import User
-
-router = APIRouter()
-
-
-@router.get("/my-stuff")
-async def my_stuff(user: ActiveUserDep) -> dict:
-    return {"user_id": str(user.id), "username": user.username}
-```
-
-- `ActiveUserDep` 是 `Annotated[User, Depends(get_current_active_user)]` 的别名
-- 路由会自动校验 Bearer token + 用户存在 + `is_active=True`
-- 失败时框架直接返 401/403，业务代码无需关心
-
-### 5. 安全设计要点
-
-- **失败响应统一化**：登录失败统一返回"账号或密码错误"，不区分"用户不存在"vs"密码错"，**防用户名枚举**
-- **时序攻击防御**：即使账号不存在，service 层也会跑一次 `verify_password` 让响应时间趋近"密码错"的情况
-- **密码字段不外泄**：`UserOut` schema 不含 `hashed_password`；日志里也不打密码
-- **bcrypt 自带恒定时间比较**：`verify_password` 用 `bcrypt.checkpw`，天然抗时序攻击
-- **JWT typ 字段**：claims 里固定 `"typ":"access"`，decode 时校验，为后续 refresh token 预留差异化
-
-## 启动应用
-
-```bash
-# 开发模式（热重载）
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-
-# 验证：所有中间件通时 status=ok；任一不可达 status=degraded（HTTP 仍 200）
-curl http://localhost:8000/health
-
-# OpenAPI 文档
-# http://localhost:8000/docs
-```
-
-`/health` 返回结构示例：
-
-```json
-{
-  "status": "ok",
-  "app": "industry-research-assistant",
-  "env": "dev",
-  "version": "0.1.0",
-  "db":     {"status": "ok", "detail": null},
-  "redis":  {"status": "ok", "detail": null},
-  "milvus": {"status": "ok", "detail": "v2.4.17"},
-  "minio":  {"status": "ok", "detail": "buckets=0"}
-}
-```
-
-## 常用命令
-
-```bash
-uv run pytest                  # 跑测试
-uv run ruff check .            # lint
-uv run ruff format .           # 格式化
-uv run mypy                    # 类型检查
-uv run alembic upgrade head    # 升级到最新 schema
-```
-
-## 下一个 PR 计划
-
-- Refresh token / token 撤销机制（Redis 黑名单或纯 JWT 轮转）
-- 基于 Redis 的全局限流中间件（防爆破 `/auth/login`）
-- Repository 层抽象（替代路由层直接 ORM）

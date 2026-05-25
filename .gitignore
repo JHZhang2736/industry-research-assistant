@@ -1,36 +1,33 @@
-# ===== Python =====
+# =============================================================================
+# Python / Backend
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Distribution / packaging
 build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+pip-wheel-metadata/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Virtual envs
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# pytest / coverage
+# pytest / coverage / tox
 .pytest_cache/
 .coverage
 .coverage.*
@@ -40,75 +37,157 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+nosetests.xml
 
-# mypy / ruff / type checkers
+# Type checkers / linters
 .mypy_cache/
 .dmypy.json
 dmypy.json
 .ruff_cache/
 .pytype/
+.pyre/
 
 # Jupyter
-.ipynb_checkpoints
-*.ipynb
+.ipynb_checkpoints/
 
-# ===== Node / Frontend =====
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# =============================================================================
+# Virtual environments
+# =============================================================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# =============================================================================
+# Secrets / Local config
+# =============================================================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+secret/
+
+# =============================================================================
+# Node / Frontend
+# =============================================================================
 node_modules/
+.pnpm-store/
+.yarn/cache
+.yarn/install-state.gz
+.pnp.*
+
+# Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-.pnpm-store/
+lerna-debug.log*
 
-# Build output
+# Vite / Next / build output
 frontend/dist/
+frontend/dist-ssr/
 frontend/build/
 frontend/.vite/
 .next/
 out/
+*.tsbuildinfo
+*.local
 
-# ===== IDE / Editor =====
+# Tool caches
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.turbo/
+.cache/
+.rollup.cache/
+
+# Test artifacts
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+
+# =============================================================================
+# IDE / Editor
+# =============================================================================
 .idea/
 .vscode/
+!.vscode/extensions.json
 *.iml
 *.swp
 *.swo
+*.sw?
 *~
 .project
 .classpath
 .settings/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
-# ===== OS =====
+# =============================================================================
+# OS
+# =============================================================================
 .DS_Store
+._*
 Thumbs.db
+ehthumbs.db
 desktop.ini
 $RECYCLE.BIN/
 
-# ===== Logs =====
+# =============================================================================
+# Logs / Temp / Backup
+# =============================================================================
 logs/
 *.log
+*.bak
+*.tmp
+*.temp
+*.orig
 
-# ===== Secrets / Local config =====
-.env.local
-.env.*.local
-*.pem
-*.key
-secrets/
-
-# ===== Docker volumes / runtime data =====
+# =============================================================================
+# Docker volumes / runtime data
+# =============================================================================
 docker/volumes/
 docker/data/
 *.pid
 
-# ===== Project artifacts =====
-# 限定为仓库根级目录，避免误伤 backend/src/app/storage/ 等业务代码目录
+# =============================================================================
+# Project runtime artifacts
+# 仅匹配仓库根目录或显式后端路径，避免误伤业务代码目录（如 backend/app/...）
+# =============================================================================
 /uploads/
 /storage/
 /tmp/
 /temp/
+backend/uploads/
+backend/storage/
+backend/logs/
+backend/tmp/
+backend/data/
+backend/.cache/
+
+# Local databases
 *.sqlite
 *.sqlite3
 *.db
+*.db-journal
 
+# =============================================================================
+# Claude Code / AI assistant scratch
+# =============================================================================
 .claude/
-claude.md
+CLAUDE.local.md
