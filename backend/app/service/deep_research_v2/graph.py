@@ -261,11 +261,11 @@ class DeepResearchGraph:
             raise asyncio.CancelledError(f"research_cancelled:{session_id}")
 
     async def _plan_node(self, state: ResearchState) -> Dict[str, Any]:
-        """规划节点"""
+        """规划节点（phase 设为 INIT 以触发 architect._initial_planning 的 phase==INIT 守卫）"""
         self._maybe_cancel(state)
         logger.info("Executing Plan node...")
         state = dict(state)
-        state["phase"] = ResearchPhase.PLANNING.value
+        state["phase"] = ResearchPhase.INIT.value
         result = await self.architect.process(state)
         return dict(result)
 
@@ -324,7 +324,12 @@ class DeepResearchGraph:
         return dict(result)
 
     async def _re_research_node(self, state: ResearchState) -> Dict[str, Any]:
-        """补充搜索节点（审核要求补料）"""
+        """补充搜索节点（审核要求补料）
+
+        注：scout._supplementary_research 在结束时会把 phase 设为 WRITING（遗留副作用）。
+        紧接其后的 _rewrite_node 会再次设 WRITING，所以当前可正常工作；
+        但若 scout 不再设 phase，需要本节点显式设 phase 为 WRITING 以便下游 writer 守卫通过。
+        """
         self._maybe_cancel(state)
         logger.info("Executing ReResearch node...")
         state = dict(state)
@@ -365,7 +370,7 @@ class DeepResearchGraph:
         if phase == ResearchPhase.REVISING.value:
             return "revise"
 
-        logger.info(f"[route] unexpected phase '{phase}' -> complete (fallback)")
+        logger.warning(f"[route] unexpected phase '{phase}' -> complete (fallback)")
         return "complete"
 
     async def run(
