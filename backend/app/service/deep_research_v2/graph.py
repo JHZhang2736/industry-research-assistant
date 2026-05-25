@@ -452,13 +452,14 @@ class DeepResearchGraph:
         # 存储 user_id 用于检查点
         state["_user_id"] = user_id
 
-        # 始终使用手写版本执行（支持实时SSE流式输出）
-        # LangGraph 版本会批量处理消息，无法实现实时流式输出
-        # if LANGGRAPH_AVAILABLE and self.graph:
-        #     async for event in self._run_with_langgraph(state):
-        #         yield event
-        # else:
-        async for event in self._run_simplified(state):
+        # LangGraph 0.2+ 支持 stream_mode="custom"，已能满足节点内实时流式
+        # 见 docs/02-架构决策记录.md ADR-002 / ADR-003
+        if not self.graph:
+            raise RuntimeError(
+                "LangGraph 不可用：DeepResearchGraph 未能编译。"
+                "检查 langgraph 是否已安装（requirements.txt >= 0.2.40）。"
+            )
+        async for event in self._run_with_langgraph(state):
             yield event
 
     async def _run_with_langgraph(
