@@ -238,10 +238,12 @@ class BaseAgent(ABC):
         """
         添加消息到状态（用于SSE流式输出）
 
-        Args:
-            state: 研究状态
-            event_type: 事件类型
-            content: 消息内容
+        三层路径：
+        1. 在 LangGraph 节点上下文中：调用 get_stream_writer() 推事件（custom stream mode）
+        2. 旧路径（_run_simplified 还在的过渡期）：推到 _message_queue
+        3. 都没有：仅追加到 state["messages"]（如 run_sync 单元测试）
+
+        无论哪条路径，都会追加到 state["messages"] 以便日志/检查点保留事件历史。
         """
         message = {
             "type": event_type,
@@ -251,15 +253,29 @@ class BaseAgent(ABC):
         }
         state["messages"].append(message)
 
-        # 如果有消息队列，立即推送（支持实时流式输出）
+        # 路径 1：LangGraph custom stream
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer(message)
+            self.logger.debug(f"[stream_writer] Pushed event: {event_type}")
+            return
+        except (ImportError, RuntimeError):
+            # ImportError: langgraph 不可用（不应该发生，requirements 已强制）
+            # RuntimeError: 不在 graph 执行上下文中
+            pass
+
+        # 路径 2：旧的消息队列（_run_simplified 兼容）
         if "_message_queue" in state and state["_message_queue"] is not None:
             try:
                 state["_message_queue"].put_nowait(message)
-                self.logger.info(f"[SSE] Queued event: {event_type} (queue size: {state['_message_queue'].qsize()})")
+                self.logger.debug(f"[queue] Pushed event: {event_type} (size: {state['_message_queue'].qsize()})")
+                return
             except Exception as e:
                 self.logger.warning(f"Failed to push message to queue: {e}")
-        else:
-            self.logger.warning(f"[SSE] No queue available for event: {event_type}")
+
+        # 路径 3：什么都没有，仅记录
+        self.logger.debug(f"[no-sink] Event recorded only in state.messages: {event_type}")
 
     def add_log(
         self,
