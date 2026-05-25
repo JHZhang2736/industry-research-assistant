@@ -260,9 +260,24 @@ class DeepResearchGraph:
             logger.info(f"Cancelled at node entry: session={session_id}")
             raise asyncio.CancelledError(f"research_cancelled:{session_id}")
 
+    def _emit_phase_start(self, phase_key: str, content: str) -> None:
+        """在节点入口推送 phase 开始事件（custom stream）
+
+        与 _run_with_langgraph 末尾从 updates 流推的 phase 完成事件配对，
+        让前端能看到「开始 X」→ 「X 完成」两次状态切换。
+        """
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({"type": "phase", "phase": phase_key, "content": content})
+        except (ImportError, RuntimeError, KeyError):
+            # 不在 graph 上下文（如 run_sync 测试），静默忽略
+            pass
+
     async def _plan_node(self, state: ResearchState) -> Dict[str, Any]:
         """规划节点（phase 设为 INIT 以触发 architect._initial_planning 的 phase==INIT 守卫）"""
         self._maybe_cancel(state)
+        self._emit_phase_start("planning", "开始规划研究...")
         logger.info("Executing Plan node...")
         state = dict(state)
         state["phase"] = ResearchPhase.INIT.value
@@ -272,6 +287,7 @@ class DeepResearchGraph:
     async def _research_node(self, state: ResearchState) -> Dict[str, Any]:
         """初次研究节点"""
         self._maybe_cancel(state)
+        self._emit_phase_start("researching", "开始深度搜索...")
         logger.info("Executing Research node...")
         state = dict(state)
         state["phase"] = ResearchPhase.RESEARCHING.value
@@ -281,6 +297,7 @@ class DeepResearchGraph:
     async def _analyze_data_node(self, state: ResearchState) -> Dict[str, Any]:
         """数据分析节点（DataAnalyst）"""
         self._maybe_cancel(state)
+        self._emit_phase_start("analyzing", "开始数据分析...")
         logger.info("Executing AnalyzeData node...")
         state = dict(state)
         state["phase"] = ResearchPhase.ANALYZING.value
@@ -290,6 +307,7 @@ class DeepResearchGraph:
     async def _analyze_wizard_node(self, state: ResearchState) -> Dict[str, Any]:
         """代码分析节点（CodeWizard，画图）"""
         self._maybe_cancel(state)
+        self._emit_phase_start("analyzing", "开始生成图表...")
         logger.info("Executing AnalyzeWizard node...")
         state = dict(state)
         state["phase"] = ResearchPhase.ANALYZING.value
@@ -299,6 +317,7 @@ class DeepResearchGraph:
     async def _write_node(self, state: ResearchState) -> Dict[str, Any]:
         """写作节点"""
         self._maybe_cancel(state)
+        self._emit_phase_start("writing", "开始撰写报告...")
         logger.info("Executing Write node...")
         state = dict(state)
         state["phase"] = ResearchPhase.WRITING.value
@@ -308,6 +327,7 @@ class DeepResearchGraph:
     async def _review_node(self, state: ResearchState) -> Dict[str, Any]:
         """审核节点"""
         self._maybe_cancel(state)
+        self._emit_phase_start("reviewing", "开始审核...")
         logger.info("Executing Review node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVIEWING.value
@@ -317,6 +337,7 @@ class DeepResearchGraph:
     async def _revise_node(self, state: ResearchState) -> Dict[str, Any]:
         """修订节点（仅文字修订）"""
         self._maybe_cancel(state)
+        self._emit_phase_start("revising", "开始修订...")
         logger.info("Executing Revise node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVISING.value
@@ -331,6 +352,7 @@ class DeepResearchGraph:
         但若 scout 不再设 phase，需要本节点显式设 phase 为 WRITING 以便下游 writer 守卫通过。
         """
         self._maybe_cancel(state)
+        self._emit_phase_start("re_researching", "开始补充搜索...")
         logger.info("Executing ReResearch node...")
         state = dict(state)
         state["phase"] = ResearchPhase.RE_RESEARCHING.value
@@ -340,6 +362,7 @@ class DeepResearchGraph:
     async def _rewrite_node(self, state: ResearchState) -> Dict[str, Any]:
         """补料后重写节点"""
         self._maybe_cancel(state)
+        self._emit_phase_start("writing", "开始基于新信息重写...")
         logger.info("Executing Rewrite node...")
         state = dict(state)
         state["phase"] = ResearchPhase.WRITING.value
@@ -521,8 +544,8 @@ class DeepResearchGraph:
             if self.checkpoint_service and session_id:
                 try:
                     self.checkpoint_service.update_status(session_id, "cancelled")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"update_status(cancelled) failed (non-fatal): {e}")
             yield {"type": "research_cancelled", "message": "研究已取消"}
             return
 
@@ -531,8 +554,8 @@ class DeepResearchGraph:
             if self.checkpoint_service and session_id:
                 try:
                     self.checkpoint_service.update_status(session_id, "failed", str(e))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"update_status(failed) failed (non-fatal): {e}")
             yield {"type": "error", "content": str(e)}
             return
 
@@ -540,10 +563,34 @@ class DeepResearchGraph:
         if self.checkpoint_service and session_id:
             try:
                 self.checkpoint_service.update_status(session_id, "completed")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"update_status(completed) failed (non-fatal): {e}")
 
         yield self._build_completion_event(last_state)
+
+    def _build_ui_references(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """将 state.references + facts 转换为前端友好的引用列表"""
+        facts = state.get("facts", [])
+        raw_refs = state.get("references", [])
+        ui_refs = []
+        for idx, ref in enumerate(raw_refs):
+            fact = next(
+                (f for f in facts if f.get("source_url") == ref.get("url")), None
+            )
+            title = ref.get("source") or ref.get("marker") or ""
+            if not title and fact:
+                content = fact.get("content", "")
+                title = content[:50] + "..." if len(content) > 50 else content
+            if not title:
+                title = f"来源 {idx + 1}"
+            ui_refs.append({
+                "id": ref.get("id", idx + 1),
+                "title": title,
+                "link": ref.get("url", ""),
+                "content": fact.get("content", "")[:200] if fact else "",
+                "source": "web",
+            })
+        return ui_refs
 
     def _build_checkpoint_event(
         self,
@@ -597,26 +644,7 @@ class DeepResearchGraph:
             ui_state["search_results"] = search_results_for_ui
 
         # references 的 UI 转换
-        raw_references = state.get("references", [])
-        ui_references = []
-        for idx, ref in enumerate(raw_references):
-            fact = next(
-                (f for f in facts if f.get("source_url") == ref.get("url")), None
-            )
-            title = ref.get("source") or ref.get("marker") or ""
-            if not title and fact:
-                content = fact.get("content", "")
-                title = content[:50] + "..." if len(content) > 50 else content
-            if not title:
-                title = f"来源 {idx + 1}"
-            ui_references.append({
-                "id": ref.get("id", idx + 1),
-                "title": title,
-                "link": ref.get("url", ""),
-                "content": fact.get("content", "")[:200] if fact else "",
-                "source": "web",
-            })
-        ui_state["references"] = ui_references
+        ui_state["references"] = self._build_ui_references(state)
 
         # 节点 -> 步骤类型
         step_type_map = {
@@ -669,25 +697,7 @@ class DeepResearchGraph:
     def _build_completion_event(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """组装 research_complete 事件（与旧 _run_simplified 末尾等价）"""
         facts = state.get("facts", [])
-        raw_refs = state.get("references", [])
-        ui_refs = []
-        for idx, ref in enumerate(raw_refs):
-            fact = next(
-                (f for f in facts if f.get("source_url") == ref.get("url")), None
-            )
-            title = ref.get("source") or ref.get("marker") or ""
-            if not title and fact:
-                content = fact.get("content", "")
-                title = content[:50] + "..." if len(content) > 50 else content
-            if not title:
-                title = f"来源 {idx + 1}"
-            ui_refs.append({
-                "id": ref.get("id", idx + 1),
-                "title": title,
-                "link": ref.get("url", ""),
-                "content": fact.get("content", "")[:200] if fact else "",
-                "source": "web",
-            })
+        ui_refs = self._build_ui_references(state)
 
         return {
             "type": "research_complete",
