@@ -198,62 +198,99 @@ class DeepResearchGraph:
         return self.checkpoint_service.get_checkpoint_info(session_id)
 
     def _build_langgraph(self):
-        """构建 LangGraph 状态图"""
-        # 定义图
+        """
+        构建 LangGraph 状态图
+
+        拓扑（与 _run_simplified 等价的循环语义）：
+
+            plan -> research -> analyze_data -> analyze_wizard -> write -> review
+            review ─┬─ (COMPLETED 或 iteration >= max) ─> END
+                    ├─ RE_RESEARCHING ─> re_research -> rewrite -> review
+                    └─ REVISING       ─> revise -> review
+        """
         workflow = StateGraph(ResearchState)
 
-        # 添加节点
+        # 节点：每个节点对应一个 agent 调用（或 phase 切换）
         workflow.add_node("plan", self._plan_node)
         workflow.add_node("research", self._research_node)
-        workflow.add_node("analyze", self._analyze_node)
+        workflow.add_node("analyze_data", self._analyze_data_node)
+        workflow.add_node("analyze_wizard", self._analyze_wizard_node)
         workflow.add_node("write", self._write_node)
         workflow.add_node("review", self._review_node)
         workflow.add_node("revise", self._revise_node)
+        workflow.add_node("re_research", self._re_research_node)
+        workflow.add_node("rewrite", self._rewrite_node)
 
-        # 设置入口
+        # 入口
         workflow.set_entry_point("plan")
 
-        # 添加边
+        # 线性主干
         workflow.add_edge("plan", "research")
-        workflow.add_edge("research", "analyze")
-        workflow.add_edge("analyze", "write")
+        workflow.add_edge("research", "analyze_data")
+        workflow.add_edge("analyze_data", "analyze_wizard")
+        workflow.add_edge("analyze_wizard", "write")
         workflow.add_edge("write", "review")
 
-        # 条件边：审核后决定下一步
+        # 三路条件边
         workflow.add_conditional_edges(
             "review",
-            self._should_revise,
+            self._route_after_review,
             {
+                "complete": END,
+                "re_research": "re_research",
                 "revise": "revise",
-                "complete": END
             }
         )
 
-        # 修订后回到审核
+        # 循环回边
+        workflow.add_edge("re_research", "rewrite")
+        workflow.add_edge("rewrite", "review")
         workflow.add_edge("revise", "review")
 
         return workflow.compile()
 
+    def _maybe_cancel(self, state: ResearchState) -> None:
+        """
+        在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。
+
+        LangGraph 会捕获 CancelledError 并终止 astream，外层包装捕获后发 research_cancelled 事件。
+        """
+        session_id = state.get("session_id", "")
+        if session_id and is_research_cancelled(session_id):
+            logger.info(f"Cancelled at node entry: session={session_id}")
+            raise asyncio.CancelledError(f"research_cancelled:{session_id}")
+
     async def _plan_node(self, state: ResearchState) -> Dict[str, Any]:
         """规划节点"""
+        self._maybe_cancel(state)
         logger.info("Executing Plan node...")
-        # 创建状态副本以避免直接修改
         state = dict(state)
-        state["phase"] = ResearchPhase.INIT.value
+        state["phase"] = ResearchPhase.PLANNING.value
         result = await self.architect.process(state)
         return dict(result)
 
     async def _research_node(self, state: ResearchState) -> Dict[str, Any]:
-        """研究节点"""
+        """初次研究节点"""
+        self._maybe_cancel(state)
         logger.info("Executing Research node...")
         state = dict(state)
         state["phase"] = ResearchPhase.RESEARCHING.value
         result = await self.scout.process(state)
         return dict(result)
 
-    async def _analyze_node(self, state: ResearchState) -> Dict[str, Any]:
-        """分析节点"""
-        logger.info("Executing Analyze node...")
+    async def _analyze_data_node(self, state: ResearchState) -> Dict[str, Any]:
+        """数据分析节点（DataAnalyst）"""
+        self._maybe_cancel(state)
+        logger.info("Executing AnalyzeData node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.ANALYZING.value
+        result = await self.data_analyst.process(state)
+        return dict(result)
+
+    async def _analyze_wizard_node(self, state: ResearchState) -> Dict[str, Any]:
+        """代码分析节点（CodeWizard，画图）"""
+        self._maybe_cancel(state)
+        logger.info("Executing AnalyzeWizard node...")
         state = dict(state)
         state["phase"] = ResearchPhase.ANALYZING.value
         result = await self.wizard.process(state)
@@ -261,6 +298,7 @@ class DeepResearchGraph:
 
     async def _write_node(self, state: ResearchState) -> Dict[str, Any]:
         """写作节点"""
+        self._maybe_cancel(state)
         logger.info("Executing Write node...")
         state = dict(state)
         state["phase"] = ResearchPhase.WRITING.value
@@ -269,6 +307,7 @@ class DeepResearchGraph:
 
     async def _review_node(self, state: ResearchState) -> Dict[str, Any]:
         """审核节点"""
+        self._maybe_cancel(state)
         logger.info("Executing Review node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVIEWING.value
@@ -276,18 +315,57 @@ class DeepResearchGraph:
         return dict(result)
 
     async def _revise_node(self, state: ResearchState) -> Dict[str, Any]:
-        """修订节点"""
+        """修订节点（仅文字修订）"""
+        self._maybe_cancel(state)
         logger.info("Executing Revise node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVISING.value
         result = await self.writer.process(state)
         return dict(result)
 
-    def _should_revise(self, state: ResearchState) -> Literal["revise", "complete"]:
-        """决定是否需要修订"""
-        # 检查是否有未解决的严重问题
-        if state["unresolved_issues"] > 0 and state["iteration"] < state["max_iterations"]:
+    async def _re_research_node(self, state: ResearchState) -> Dict[str, Any]:
+        """补充搜索节点（审核要求补料）"""
+        self._maybe_cancel(state)
+        logger.info("Executing ReResearch node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.RE_RESEARCHING.value
+        result = await self.scout.process(state)
+        return dict(result)
+
+    async def _rewrite_node(self, state: ResearchState) -> Dict[str, Any]:
+        """补料后重写节点"""
+        self._maybe_cancel(state)
+        logger.info("Executing Rewrite node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.WRITING.value
+        result = await self.writer.process(state)
+        return dict(result)
+
+    def _route_after_review(
+        self, state: ResearchState
+    ) -> Literal["complete", "re_research", "revise"]:
+        """
+        审核后的三路路由：
+
+        - iteration 已经用完 -> 直接 complete
+        - critic 把 phase 设为 COMPLETED -> complete
+        - critic 把 phase 设为 RE_RESEARCHING -> re_research（接 rewrite）
+        - critic 把 phase 设为 REVISING -> revise
+        - 其他兜底 -> complete
+        """
+        if state.get("iteration", 0) >= state.get("max_iterations", 3):
+            logger.info(f"[route] iteration cap reached -> complete")
+            return "complete"
+
+        phase = state.get("phase", "")
+        if phase == ResearchPhase.COMPLETED.value:
+            return "complete"
+        if phase == ResearchPhase.RE_RESEARCHING.value:
+            return "re_research"
+        if phase == ResearchPhase.REVISING.value:
             return "revise"
+
+        logger.info(f"[route] unexpected phase '{phase}' -> complete (fallback)")
         return "complete"
 
     async def run(
