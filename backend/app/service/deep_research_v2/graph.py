@@ -11,7 +11,7 @@ Plan -> Research -> Analyze -> Write -> Review -> (Revise) -> Complete
 
 import logging
 import asyncio
-from typing import Dict, Any, List, Literal, AsyncGenerator
+from typing import Dict, Any, List, Literal, AsyncGenerator, Optional
 from datetime import datetime
 
 # 导入取消检查函数
@@ -27,13 +27,7 @@ except ImportError:
         def clear_cancel_flag(session_id: str):
             pass
 
-# LangGraph 导入 - 如果没有安装则使用简化版本
-try:
-    from langgraph.graph import StateGraph, END
-    LANGGRAPH_AVAILABLE = True
-except ImportError:
-    LANGGRAPH_AVAILABLE = False
-    logging.warning("LangGraph not installed. Using simplified workflow.")
+from langgraph.graph import StateGraph, END
 
 from .state import ResearchState, ResearchPhase, create_initial_state
 from .agents import ChiefArchitect, DeepScout, CodeWizard, CriticMaster, LeadWriter, DataAnalyst
@@ -140,10 +134,7 @@ class DeepResearchGraph:
         self.checkpoint_service = get_checkpoint_service()
 
         # 构建图
-        if LANGGRAPH_AVAILABLE:
-            self.graph = self._build_langgraph()
-        else:
-            self.graph = None
+        self.graph = self._build_langgraph()
 
     def _save_checkpoint(
         self,
@@ -197,62 +188,117 @@ class DeepResearchGraph:
         return self.checkpoint_service.get_checkpoint_info(session_id)
 
     def _build_langgraph(self):
-        """构建 LangGraph 状态图"""
-        # 定义图
+        """
+        构建 LangGraph 状态图
+
+        拓扑：
+
+            plan -> research -> analyze_data -> analyze_wizard -> write -> review
+            review ─┬─ (COMPLETED 或 iteration >= max) ─> END
+                    ├─ RE_RESEARCHING ─> re_research -> rewrite -> review
+                    └─ REVISING       ─> revise -> review
+        """
         workflow = StateGraph(ResearchState)
 
-        # 添加节点
+        # 节点：每个节点对应一个 agent 调用（或 phase 切换）
         workflow.add_node("plan", self._plan_node)
         workflow.add_node("research", self._research_node)
-        workflow.add_node("analyze", self._analyze_node)
+        workflow.add_node("analyze_data", self._analyze_data_node)
+        workflow.add_node("analyze_wizard", self._analyze_wizard_node)
         workflow.add_node("write", self._write_node)
         workflow.add_node("review", self._review_node)
         workflow.add_node("revise", self._revise_node)
+        workflow.add_node("re_research", self._re_research_node)
+        workflow.add_node("rewrite", self._rewrite_node)
 
-        # 设置入口
+        # 入口
         workflow.set_entry_point("plan")
 
-        # 添加边
+        # 线性主干
         workflow.add_edge("plan", "research")
-        workflow.add_edge("research", "analyze")
-        workflow.add_edge("analyze", "write")
+        workflow.add_edge("research", "analyze_data")
+        workflow.add_edge("analyze_data", "analyze_wizard")
+        workflow.add_edge("analyze_wizard", "write")
         workflow.add_edge("write", "review")
 
-        # 条件边：审核后决定下一步
+        # 三路条件边
         workflow.add_conditional_edges(
             "review",
-            self._should_revise,
+            self._route_after_review,
             {
+                "complete": END,
+                "re_research": "re_research",
                 "revise": "revise",
-                "complete": END
             }
         )
 
-        # 修订后回到审核
+        # 循环回边
+        workflow.add_edge("re_research", "rewrite")
+        workflow.add_edge("rewrite", "review")
         workflow.add_edge("revise", "review")
 
         return workflow.compile()
 
+    def _maybe_cancel(self, state: ResearchState) -> None:
+        """
+        在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。
+
+        LangGraph 会捕获 CancelledError 并终止 astream，外层包装捕获后发 research_cancelled 事件。
+        """
+        session_id = state.get("session_id", "")
+        if session_id and is_research_cancelled(session_id):
+            logger.info(f"Cancelled at node entry: session={session_id}")
+            raise asyncio.CancelledError(f"research_cancelled:{session_id}")
+
+    def _emit_phase_start(self, phase_key: str, content: str) -> None:
+        """在节点入口推送 phase 开始事件（custom stream）
+
+        与 _run_with_langgraph 末尾从 updates 流推的 phase 完成事件配对，
+        让前端能看到「开始 X」→ 「X 完成」两次状态切换。
+        """
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({"type": "phase", "phase": phase_key, "content": content})
+        except (ImportError, RuntimeError, KeyError):
+            # 不在 graph 上下文（如 run_sync 测试），静默忽略
+            pass
+
     async def _plan_node(self, state: ResearchState) -> Dict[str, Any]:
-        """规划节点"""
+        """规划节点（phase 设为 INIT 以触发 architect._initial_planning 的 phase==INIT 守卫）"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("planning", "开始规划研究...")
         logger.info("Executing Plan node...")
-        # 创建状态副本以避免直接修改
         state = dict(state)
         state["phase"] = ResearchPhase.INIT.value
         result = await self.architect.process(state)
         return dict(result)
 
     async def _research_node(self, state: ResearchState) -> Dict[str, Any]:
-        """研究节点"""
+        """初次研究节点"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("researching", "开始深度搜索...")
         logger.info("Executing Research node...")
         state = dict(state)
         state["phase"] = ResearchPhase.RESEARCHING.value
         result = await self.scout.process(state)
         return dict(result)
 
-    async def _analyze_node(self, state: ResearchState) -> Dict[str, Any]:
-        """分析节点"""
-        logger.info("Executing Analyze node...")
+    async def _analyze_data_node(self, state: ResearchState) -> Dict[str, Any]:
+        """数据分析节点（DataAnalyst）"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("analyzing", "开始数据分析...")
+        logger.info("Executing AnalyzeData node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.ANALYZING.value
+        result = await self.data_analyst.process(state)
+        return dict(result)
+
+    async def _analyze_wizard_node(self, state: ResearchState) -> Dict[str, Any]:
+        """代码分析节点（CodeWizard，画图）"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("analyzing", "开始生成图表...")
+        logger.info("Executing AnalyzeWizard node...")
         state = dict(state)
         state["phase"] = ResearchPhase.ANALYZING.value
         result = await self.wizard.process(state)
@@ -260,6 +306,8 @@ class DeepResearchGraph:
 
     async def _write_node(self, state: ResearchState) -> Dict[str, Any]:
         """写作节点"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("writing", "开始撰写报告...")
         logger.info("Executing Write node...")
         state = dict(state)
         state["phase"] = ResearchPhase.WRITING.value
@@ -268,6 +316,8 @@ class DeepResearchGraph:
 
     async def _review_node(self, state: ResearchState) -> Dict[str, Any]:
         """审核节点"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("reviewing", "开始审核...")
         logger.info("Executing Review node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVIEWING.value
@@ -275,18 +325,65 @@ class DeepResearchGraph:
         return dict(result)
 
     async def _revise_node(self, state: ResearchState) -> Dict[str, Any]:
-        """修订节点"""
+        """修订节点（仅文字修订）"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("revising", "开始修订...")
         logger.info("Executing Revise node...")
         state = dict(state)
         state["phase"] = ResearchPhase.REVISING.value
         result = await self.writer.process(state)
         return dict(result)
 
-    def _should_revise(self, state: ResearchState) -> Literal["revise", "complete"]:
-        """决定是否需要修订"""
-        # 检查是否有未解决的严重问题
-        if state["unresolved_issues"] > 0 and state["iteration"] < state["max_iterations"]:
+    async def _re_research_node(self, state: ResearchState) -> Dict[str, Any]:
+        """补充搜索节点（审核要求补料）
+
+        注：scout._supplementary_research 在结束时会把 phase 设为 WRITING（遗留副作用）。
+        紧接其后的 _rewrite_node 会再次设 WRITING，所以当前可正常工作；
+        但若 scout 不再设 phase，需要本节点显式设 phase 为 WRITING 以便下游 writer 守卫通过。
+        """
+        self._maybe_cancel(state)
+        self._emit_phase_start("re_researching", "开始补充搜索...")
+        logger.info("Executing ReResearch node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.RE_RESEARCHING.value
+        result = await self.scout.process(state)
+        return dict(result)
+
+    async def _rewrite_node(self, state: ResearchState) -> Dict[str, Any]:
+        """补料后重写节点"""
+        self._maybe_cancel(state)
+        self._emit_phase_start("writing", "开始基于新信息重写...")
+        logger.info("Executing Rewrite node...")
+        state = dict(state)
+        state["phase"] = ResearchPhase.WRITING.value
+        result = await self.writer.process(state)
+        return dict(result)
+
+    def _route_after_review(
+        self, state: ResearchState
+    ) -> Literal["complete", "re_research", "revise"]:
+        """
+        审核后的三路路由：
+
+        - iteration 已经用完 -> 直接 complete
+        - critic 把 phase 设为 COMPLETED -> complete
+        - critic 把 phase 设为 RE_RESEARCHING -> re_research（接 rewrite）
+        - critic 把 phase 设为 REVISING -> revise
+        - 其他兜底 -> complete
+        """
+        if state.get("iteration", 0) >= state.get("max_iterations", 3):
+            logger.info(f"[route] iteration cap reached -> complete")
+            return "complete"
+
+        phase = state.get("phase", "")
+        if phase == ResearchPhase.COMPLETED.value:
+            return "complete"
+        if phase == ResearchPhase.RE_RESEARCHING.value:
+            return "re_research"
+        if phase == ResearchPhase.REVISING.value:
             return "revise"
+
+        logger.warning(f"[route] unexpected phase '{phase}' -> complete (fallback)")
         return "complete"
 
     async def run(
@@ -345,399 +442,256 @@ class DeepResearchGraph:
         # 存储 user_id 用于检查点
         state["_user_id"] = user_id
 
-        # 始终使用手写版本执行（支持实时SSE流式输出）
-        # LangGraph 版本会批量处理消息，无法实现实时流式输出
-        # if LANGGRAPH_AVAILABLE and self.graph:
-        #     async for event in self._run_with_langgraph(state):
-        #         yield event
-        # else:
-        async for event in self._run_simplified(state):
+        async for event in self._run_with_langgraph(state):
             yield event
 
-    async def _run_with_langgraph(self, state: ResearchState) -> AsyncGenerator[Dict[str, Any], None]:
-        """使用 LangGraph 执行"""
-        # 追踪已输出的消息数量，避免重复
-        yielded_count = 0
-
-        try:
-            # LangGraph 的流式执行
-            async for output in self.graph.astream(state):
-                # 提取消息并输出
-                for node_name, node_state in output.items():
-                    if isinstance(node_state, dict) and "messages" in node_state:
-                        messages = node_state["messages"]
-                        # 只输出新消息（跳过已输出的）
-                        new_messages = messages[yielded_count:]
-                        for message in new_messages:
-                            yield message
-                        yielded_count = len(messages)
-
-        except Exception as e:
-            logger.error(f"LangGraph execution error: {e}")
-            yield {"type": "error", "content": str(e)}
-
-    async def _run_simplified(self, state: ResearchState) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _run_with_langgraph(
+        self, state: ResearchState
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        简化版执行流程（不依赖 LangGraph）
+        使用 LangGraph astream 执行（stream_mode=["custom","updates"]）
 
-        使用 asyncio.Queue 实现实时流式输出
+        - custom：agent 内部通过 get_stream_writer() 推的事件，直接 yield 给前端
+        - updates：每个节点完成后的状态 diff，用于触发检查点保存 + phase 切换通知
         """
-        # 创建消息队列用于实时输出
-        message_queue = asyncio.Queue()
-        state["_message_queue"] = message_queue
-
-        # 获取 session_id 用于取消检查
+        user_id = state.get("_user_id")
         session_id = state.get("session_id", "")
 
-        # 清除之前的取消标志
+        # 清除之前的取消标志，避免上次任务的残留标志立即触发本次取消
         if session_id:
             clear_cancel_flag(session_id)
 
-        async def check_cancelled():
-            """检查是否已取消"""
-            if session_id and is_research_cancelled(session_id):
-                return True
-            return False
-
-        async def run_agent_with_streaming(agent):
-            """执行 agent 并实时 yield 消息"""
-            # 检查是否已取消
-            if await check_cancelled():
-                logger.info(f"Research cancelled before starting agent: {agent.name}")
-                return
-
-            logger.info(f"Starting agent: {agent.name}")
-
-            # 启动 agent 处理任务
-            task = asyncio.create_task(agent.process(state))
-
-            msg_count = 0
-            # 在任务执行期间持续从队列获取消息
-            while not task.done():
-                # 定期检查是否已取消
-                if await check_cancelled():
-                    logger.info(f"Research cancelled during agent: {agent.name}")
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    return
-
-                try:
-                    msg = await asyncio.wait_for(message_queue.get(), timeout=0.5)
-                    msg_count += 1
-                    msg_type = msg.get('type', 'unknown')
-                    logger.info(f"[SSE YIELD] [{agent.name}] #{msg_count}: {msg_type}")
-                    yield msg
-                except asyncio.TimeoutError:
-                    # 继续等待，不发送心跳（SSE连接由前端保持）
-                    continue
-                except Exception as e:
-                    logger.warning(f"[{agent.name}] Queue error: {e}")
-                    continue
-
-            # 等待任务完成（获取可能的异常）
-            try:
-                await task
-            except Exception as e:
-                logger.error(f"Agent {agent.name} error: {e}")
-
-            # 清空剩余的消息
-            remaining = 0
-            while not message_queue.empty():
-                try:
-                    msg = message_queue.get_nowait()
-                    remaining += 1
-                    yield msg
-                except:
-                    break
-
-            logger.info(f"Agent {agent.name} completed. Messages: {msg_count} during, {remaining} remaining")
-
-        # 获取 user_id 用于检查点
-        user_id = state.get("_user_id")
-
-        # UI 状态跟踪（用于前端恢复）
-        ui_state = {
-            "research_steps": [],  # 研究步骤列表
-            "search_results": [],  # 搜索结果
-            "charts": [],  # 图表数据
-            "knowledge_graph": None,  # 知识图谱
-            "streaming_report": "",  # 流式报告内容
+        # 节点名 -> phase 事件 内容（用于 updates 流中合成"开始 X"消息）
+        # 注意：节点真正"开始"的事件在节点函数内通过 stream_writer 推，
+        # 这里 updates 流是"节点完成"的回报，用于检查点+完成统计。
+        node_to_phase_info = {
+            "plan": ("planning", "规划完成"),
+            "research": ("researching", "深度搜索完成"),
+            "analyze_data": ("analyzing", "数据分析完成"),
+            "analyze_wizard": ("analyzing", "图表生成完成"),
+            "write": ("writing", "初稿完成"),
+            "review": ("reviewing", "审核完成"),
+            "revise": ("revising", "修订完成"),
+            "re_research": ("re_researching", "补充搜索完成"),
+            "rewrite": ("rewriting", "重写完成"),
         }
 
-        def update_ui_state():
-            """更新 UI 状态 - 保留已有数据，只有新数据才更新"""
-            # 从 state 中同步数据到 ui_state - 只有当新数据有效时才更新
-            new_charts = state.get("charts", [])
-            if new_charts:
-                ui_state["charts"] = new_charts
+        # UI 状态：前端恢复时需要的研究步骤、搜索结果、图表、知识图谱、流式报告
+        ui_state = {
+            "research_steps": [],
+            "search_results": [],
+            "charts": [],
+            "knowledge_graph": None,
+            "streaming_report": "",
+        }
 
-            new_report = state.get("final_report", "")
-            if new_report:
-                ui_state["streaming_report"] = new_report
-
-            # 知识图谱 - 只有当有节点或边时才更新
-            new_kg = state.get("knowledge_graph", {})
-            if new_kg and (new_kg.get("nodes") or new_kg.get("edges")):
-                ui_state["knowledge_graph"] = new_kg
-            elif not ui_state.get("knowledge_graph"):
-                ui_state["knowledge_graph"] = {"nodes": [], "edges": []}
-
-            # 提取搜索结果 - 从 facts 中构建 UI 友好的搜索结果
-            facts = state.get("facts", [])
-            if facts:
-                search_results_for_ui = []
-                for fact in facts:
-                    # 优先使用 source_name，否则从 content 中提取标题
-                    source_name = fact.get("source_name", "")
-                    content = fact.get("content", "")
-                    # 如果没有 source_name，用 content 的前50个字符作为标题
-                    title = source_name if source_name else (content[:50] + "..." if len(content) > 50 else content)
-                    search_results_for_ui.append({
-                        "id": fact.get("id", ""),
-                        "title": title,
-                        "source": fact.get("source_type", "web"),
-                        "url": fact.get("source_url", ""),
-                        "snippet": content[:200] if content else "",
-                        "date": fact.get("timestamp", ""),
-                    })
-                ui_state["search_results"] = search_results_for_ui
-
-            # 构建前端友好的 references - 确保有 title 和 link 字段
-            raw_references = state.get("references", [])
-            ui_references = []
-            for idx, ref in enumerate(raw_references):
-                # 从 facts 中查找对应的详细信息
-                fact = next((f for f in facts if f.get("source_url") == ref.get("url")), None)
-                # 确定标题：优先用 source/marker，否则用 fact 的内容
-                title = ref.get("source") or ref.get("marker") or ""
-                if not title and fact:
-                    content = fact.get("content", "")
-                    title = content[:50] + "..." if len(content) > 50 else content
-                if not title:
-                    title = f"来源 {idx + 1}"
-
-                ui_references.append({
-                    "id": ref.get("id", idx + 1),
-                    "title": title,
-                    "link": ref.get("url", ""),
-                    "content": fact.get("content", "")[:200] if fact else "",
-                    "source": "web"
-                })
-            ui_state["references"] = ui_references
-
-            # 打印详细日志
-            kg = ui_state.get("knowledge_graph", {})
-            logger.info(f"[UI状态更新] charts={len(ui_state.get('charts', []))}, "
-                       f"search_results={len(ui_state.get('search_results', []))}, "
-                       f"knowledge_graph nodes={len(kg.get('nodes', []) if kg else [])}, "
-                       f"knowledge_graph edges={len(kg.get('edges', []) if kg else [])}, "
-                       f"references={len(ui_state.get('references', []))}, "
-                       f"report_len={len(ui_state.get('streaming_report', ''))}")
-
-        async def save_checkpoint_async(step_info: dict = None):
-            """异步保存检查点"""
-            # 更新 UI 状态
-            update_ui_state()
-            # 添加研究步骤
-            if step_info:
-                # 检查是否已有该步骤，更新状态
-                existing = next(
-                    (s for s in ui_state["research_steps"] if s.get("type") == step_info.get("type")),
-                    None
-                )
-                if existing:
-                    existing.update(step_info)
-                    logger.info(f"[检查点] 更新步骤: {step_info.get('type')}, status={step_info.get('status')}")
-                else:
-                    ui_state["research_steps"].append(step_info)
-                    logger.info(f"[检查点] 添加步骤: {step_info.get('type')}, status={step_info.get('status')}")
-
-            # 打印保存前的完整状态
-            logger.info(f"[检查点保存] session_id={session_id}, phase={state.get('phase', '')}, "
-                       f"steps={[s.get('type') for s in ui_state['research_steps']]}")
-
-            if self._save_checkpoint(state, user_id, ui_state):
-                logger.info(f"[检查点保存成功] session_id={session_id}")
-                return {"type": "checkpoint_saved", "phase": state.get("phase", ""), "session_id": session_id}
-            else:
-                logger.error(f"[检查点保存失败] session_id={session_id}")
-            return None
+        last_state: Dict[str, Any] = dict(state)
 
         try:
-            # Phase 1: Plan
-            if await check_cancelled():
-                yield {"type": "research_cancelled", "message": "研究已取消"}
-                return
-            yield {"type": "phase", "phase": "planning", "content": "开始规划研究..."}
-            state["phase"] = ResearchPhase.INIT.value
-            async for msg in run_agent_with_streaming(self.architect):
-                yield msg
-            state["messages"] = []
-            # 保存检查点（含步骤信息）
-            cp_event = await save_checkpoint_async({
-                "type": "planning",
-                "status": "completed",
-                "stats": {"sections": len(state.get("outline", []))}
-            })
-            if cp_event:
-                yield cp_event
+            async for mode, chunk in self.graph.astream(
+                state,
+                stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom":
+                    # agent 内部 stream_writer 推的事件，直接转发
+                    yield chunk
+                    continue
 
-            # Phase 2: Research (这是最需要实时输出的阶段)
-            if await check_cancelled():
-                yield {"type": "research_cancelled", "message": "研究已取消"}
-                return
-            yield {"type": "phase", "phase": "researching", "content": "开始深度搜索..."}
-            state["phase"] = ResearchPhase.RESEARCHING.value
-            async for msg in run_agent_with_streaming(self.scout):
-                yield msg
-            state["messages"] = []
-            # 保存检查点（含步骤信息）
-            cp_event = await save_checkpoint_async({
-                "type": "researching",
-                "status": "completed",
-                "stats": {
-                    "facts": len(state.get("facts", [])),
-                    "sources": len(state.get("references", []))
-                }
-            })
-            if cp_event:
-                yield cp_event
+                if mode == "updates":
+                    # chunk 形如 {node_name: state_diff}
+                    for node_name, node_diff in chunk.items():
+                        if not isinstance(node_diff, dict):
+                            continue
+                        # 合并 diff 到 last_state 以便检查点保存看到完整状态
+                        last_state.update(node_diff)
 
-            # Phase 3: Analyze
-            if await check_cancelled():
-                yield {"type": "research_cancelled", "message": "研究已取消"}
-                return
-            yield {"type": "phase", "phase": "analyzing", "content": "开始数据分析..."}
-            state["phase"] = ResearchPhase.ANALYZING.value
-            async for msg in run_agent_with_streaming(self.data_analyst):
-                yield msg
-            state["messages"] = []
-            async for msg in run_agent_with_streaming(self.wizard):
-                yield msg
-            state["messages"] = []
-            # 保存检查点（含步骤信息）
-            cp_event = await save_checkpoint_async({
-                "type": "analyzing",
-                "status": "completed",
-                "stats": {"charts": len(state.get("charts", []))}
-            })
-            if cp_event:
-                yield cp_event
+                        phase_key, phase_msg = node_to_phase_info.get(
+                            node_name, (node_name, f"{node_name} 完成")
+                        )
 
-            # Phase 4: Write
-            if await check_cancelled():
-                yield {"type": "research_cancelled", "message": "研究已取消"}
-                return
-            yield {"type": "phase", "phase": "writing", "content": "开始撰写报告..."}
-            state["phase"] = ResearchPhase.WRITING.value
-            async for msg in run_agent_with_streaming(self.writer):
-                yield msg
-            state["messages"] = []
-            # 保存检查点（含步骤信息）
-            cp_event = await save_checkpoint_async({
-                "type": "writing",
-                "status": "completed",
-                "stats": {"report_length": len(state.get("final_report", ""))}
-            })
-            if cp_event:
-                yield cp_event
+                        # 发 phase 事件
+                        yield {
+                            "type": "phase",
+                            "phase": phase_key,
+                            "content": phase_msg,
+                        }
 
-            # Phase 5 & 6: Review & Revise/Re-Research Loop
-            while state["iteration"] < state["max_iterations"]:
-                if await check_cancelled():
-                    yield {"type": "research_cancelled", "message": "研究已取消"}
-                    return
-                yield {"type": "phase", "phase": "reviewing", "content": f"审核中（第 {state['iteration'] + 1} 轮）..."}
-                state["phase"] = ResearchPhase.REVIEWING.value
-                async for msg in run_agent_with_streaming(self.critic):
-                    yield msg
-                state["messages"] = []
+                        # 触发检查点保存（落 PG，含完整后端状态 + UI 状态）
+                        cp_event = self._build_checkpoint_event(
+                            last_state, user_id, ui_state, node_name
+                        )
+                        if cp_event:
+                            yield cp_event
 
-                if state["phase"] == ResearchPhase.COMPLETED.value:
-                    break
-
-                if state["phase"] == ResearchPhase.RE_RESEARCHING.value:
-                    if await check_cancelled():
-                        yield {"type": "research_cancelled", "message": "研究已取消"}
-                        return
-                    yield {"type": "phase", "phase": "re_researching", "content": "根据审核反馈补充搜索..."}
-                    async for msg in run_agent_with_streaming(self.scout):
-                        yield msg
-                    state["messages"] = []
-
-                    yield {"type": "phase", "phase": "rewriting", "content": "基于新信息重新撰写..."}
-                    state["phase"] = ResearchPhase.WRITING.value
-                    async for msg in run_agent_with_streaming(self.writer):
-                        yield msg
-                    state["messages"] = []
-
-                elif state["phase"] == ResearchPhase.REVISING.value:
-                    if await check_cancelled():
-                        yield {"type": "research_cancelled", "message": "研究已取消"}
-                        return
-                    yield {"type": "phase", "phase": "revising", "content": "根据反馈修订报告..."}
-                    async for msg in run_agent_with_streaming(self.writer):
-                        yield msg
-                    state["messages"] = []
-                else:
-                    break
-
-            # 完成
-            logger.info(f"[Graph] ========== 研究完成 ==========")
-            logger.info(f"[Graph] 最终统计: facts={len(state.get('facts', []))}, charts={len(state.get('charts', []))}, iterations={state.get('iteration', 0)}")
-            logger.info(f"[Graph] 报告长度: {len(state.get('final_report', ''))}")
-
-            # 打印每个图表的详情
-            for i, chart in enumerate(state.get('charts', [])):
-                logger.info(f"[Graph] 图表 {i+1}: id={chart.get('id')}, title={chart.get('title')}, has_echarts={bool(chart.get('echarts_option'))}, has_image={bool(chart.get('image_base64'))}")
-
-            # 更新检查点状态为已完成
-            state["phase"] = ResearchPhase.COMPLETED.value
+        except asyncio.CancelledError as e:
+            logger.info(f"LangGraph execution cancelled: {e}")
             if self.checkpoint_service and session_id:
-                self.checkpoint_service.update_status(session_id, "completed")
-
-            # 构建前端友好的 references
-            final_facts = state.get("facts", [])
-            final_raw_refs = state.get("references", [])
-            final_ui_refs = []
-            for idx, ref in enumerate(final_raw_refs):
-                fact = next((f for f in final_facts if f.get("source_url") == ref.get("url")), None)
-                title = ref.get("source") or ref.get("marker") or ""
-                if not title and fact:
-                    content = fact.get("content", "")
-                    title = content[:50] + "..." if len(content) > 50 else content
-                if not title:
-                    title = f"来源 {idx + 1}"
-                final_ui_refs.append({
-                    "id": ref.get("id", idx + 1),
-                    "title": title,
-                    "link": ref.get("url", ""),
-                    "content": fact.get("content", "")[:200] if fact else "",
-                    "source": "web"
-                })
-
-            yield {
-                "type": "research_complete",
-                "final_report": state.get("final_report", ""),
-                "quality_score": state.get("quality_score", 0.0),
-                "facts_count": len(state.get("facts", [])),
-                "charts_count": len(state.get("charts", [])),
-                "iterations": state.get("iteration", 0),
-                "references": final_ui_refs
-            }
+                try:
+                    self.checkpoint_service.update_status(session_id, "cancelled")
+                except Exception as e:
+                    logger.debug(f"update_status(cancelled) failed (non-fatal): {e}")
+            yield {"type": "research_cancelled", "message": "研究已取消"}
+            return
 
         except Exception as e:
-            logger.error(f"Simplified execution error: {e}")
-            # 更新检查点状态为失败
+            logger.error(f"LangGraph execution error: {e}", exc_info=True)
             if self.checkpoint_service and session_id:
-                self.checkpoint_service.update_status(session_id, "failed", str(e))
+                try:
+                    self.checkpoint_service.update_status(session_id, "failed", str(e))
+                except Exception as e:
+                    logger.debug(f"update_status(failed) failed (non-fatal): {e}")
             yield {"type": "error", "content": str(e)}
-        finally:
-            # 清理队列
-            state["_message_queue"] = None
+            return
+
+        # 完成事件：发给前端展示研究结果摘要（final_report、quality_score、统计、references）
+        if self.checkpoint_service and session_id:
+            try:
+                self.checkpoint_service.update_status(session_id, "completed")
+            except Exception as e:
+                logger.debug(f"update_status(completed) failed (non-fatal): {e}")
+
+        yield self._build_completion_event(last_state)
+
+    def _build_ui_references(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """将 state.references + facts 转换为前端友好的引用列表"""
+        facts = state.get("facts", [])
+        raw_refs = state.get("references", [])
+        ui_refs = []
+        for idx, ref in enumerate(raw_refs):
+            fact = next(
+                (f for f in facts if f.get("source_url") == ref.get("url")), None
+            )
+            title = ref.get("source") or ref.get("marker") or ""
+            if not title and fact:
+                content = fact.get("content", "")
+                title = content[:50] + "..." if len(content) > 50 else content
+            if not title:
+                title = f"来源 {idx + 1}"
+            ui_refs.append({
+                "id": ref.get("id", idx + 1),
+                "title": title,
+                "link": ref.get("url", ""),
+                "content": fact.get("content", "")[:200] if fact else "",
+                "source": "web",
+            })
+        return ui_refs
+
+    def _build_checkpoint_event(
+        self,
+        state: Dict[str, Any],
+        user_id: Optional[str],
+        ui_state: Dict[str, Any],
+        node_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        节点完成后保存检查点 + 同步 UI 状态。
+
+        与旧的 save_checkpoint_async + update_ui_state 等价，
+        但作为同步方法被 astream 主循环驱动。
+        """
+        session_id = state.get("session_id", "")
+        if not self.checkpoint_service or not session_id:
+            return None
+
+        # 同步 UI 状态字段
+        new_charts = state.get("charts", [])
+        if new_charts:
+            ui_state["charts"] = new_charts
+
+        new_report = state.get("final_report", "")
+        if new_report:
+            ui_state["streaming_report"] = new_report
+
+        new_kg = state.get("knowledge_graph", {})
+        if new_kg and (new_kg.get("nodes") or new_kg.get("edges")):
+            ui_state["knowledge_graph"] = new_kg
+        elif not ui_state.get("knowledge_graph"):
+            ui_state["knowledge_graph"] = {"nodes": [], "edges": []}
+
+        facts = state.get("facts", [])
+        if facts:
+            search_results_for_ui = []
+            for fact in facts:
+                source_name = fact.get("source_name", "")
+                content = fact.get("content", "")
+                title = source_name if source_name else (
+                    content[:50] + "..." if len(content) > 50 else content
+                )
+                search_results_for_ui.append({
+                    "id": fact.get("id", ""),
+                    "title": title,
+                    "source": fact.get("source_type", "web"),
+                    "url": fact.get("source_url", ""),
+                    "snippet": content[:200] if content else "",
+                    "date": fact.get("timestamp", ""),
+                })
+            ui_state["search_results"] = search_results_for_ui
+
+        # references 的 UI 转换
+        ui_state["references"] = self._build_ui_references(state)
+
+        # 节点 -> 步骤类型
+        step_type_map = {
+            "plan": "planning",
+            "research": "researching",
+            "analyze_data": "analyzing",
+            "analyze_wizard": "analyzing",
+            "write": "writing",
+            "review": "reviewing",
+            "revise": "revising",
+            "re_research": "re_researching",
+            "rewrite": "writing",
+        }
+        step_type = step_type_map.get(node_name, node_name)
+
+        # 节点 -> stats（旧实现里按 phase 收集的统计字段）
+        if step_type == "planning":
+            stats = {"sections": len(state.get("outline", []))}
+        elif step_type == "researching":
+            stats = {
+                "facts": len(state.get("facts", [])),
+                "sources": len(state.get("references", [])),
+            }
+        elif step_type == "analyzing":
+            stats = {"charts": len(state.get("charts", []))}
+        elif step_type == "writing":
+            stats = {"report_length": len(state.get("final_report", ""))}
+        else:
+            stats = {}
+
+        step_info = {"type": step_type, "status": "completed", "stats": stats}
+
+        existing = next(
+            (s for s in ui_state["research_steps"] if s.get("type") == step_type),
+            None,
+        )
+        if existing:
+            existing.update(step_info)
+        else:
+            ui_state["research_steps"].append(step_info)
+
+        if self._save_checkpoint(state, user_id, ui_state):
+            return {
+                "type": "checkpoint_saved",
+                "phase": state.get("phase", ""),
+                "session_id": session_id,
+            }
+        return None
+
+    def _build_completion_event(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """组装 research_complete 事件，含 final_report、统计字段、前端友好的 references"""
+        facts = state.get("facts", [])
+        ui_refs = self._build_ui_references(state)
+
+        return {
+            "type": "research_complete",
+            "final_report": state.get("final_report", ""),
+            "quality_score": state.get("quality_score", 0.0),
+            "facts_count": len(facts),
+            "charts_count": len(state.get("charts", [])),
+            "iterations": state.get("iteration", 0),
+            "references": ui_refs,
+        }
 
     async def run_sync(self, query: str, session_id: str) -> ResearchState:
         """

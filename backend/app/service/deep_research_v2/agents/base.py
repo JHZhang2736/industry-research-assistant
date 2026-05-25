@@ -234,14 +234,18 @@ class BaseAgent(ABC):
             return obj
 
     def add_message(self, state: ResearchState, event_type: str, content: Any) -> None:
-        """
-        添加消息到状态（用于SSE流式输出）
+        """添加消息到状态（用于SSE流式输出）
+
+        在 LangGraph 节点上下文中通过 get_stream_writer() 推 custom 事件；
+        无论是否在上下文中，都会追加到 state["messages"] 以保留事件历史。
 
         Args:
             state: 研究状态
             event_type: 事件类型
             content: 消息内容
         """
+        from langgraph.config import get_stream_writer
+
         message = {
             "type": event_type,
             "agent": self.name,
@@ -250,15 +254,12 @@ class BaseAgent(ABC):
         }
         state["messages"].append(message)
 
-        # 如果有消息队列，立即推送（支持实时流式输出）
-        if "_message_queue" in state and state["_message_queue"] is not None:
-            try:
-                state["_message_queue"].put_nowait(message)
-                self.logger.info(f"[SSE] Queued event: {event_type} (queue size: {state['_message_queue'].qsize()})")
-            except Exception as e:
-                self.logger.warning(f"Failed to push message to queue: {e}")
-        else:
-            self.logger.warning(f"[SSE] No queue available for event: {event_type}")
+        try:
+            writer = get_stream_writer()
+            writer(message)
+        except (RuntimeError, KeyError):
+            # 不在 graph 执行上下文中（如 run_sync 或单元测试）
+            self.logger.debug(f"No stream writer in context, event recorded only: {event_type}")
 
     def add_log(
         self,

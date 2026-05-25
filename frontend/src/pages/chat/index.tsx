@@ -1,5 +1,3 @@
-
-
 import * as api from '@/api'
 import ComPageLayout from '@/components/page-layout'
 import ComSender, { AttachmentInfo } from '@/components/sender'
@@ -1174,6 +1172,13 @@ export default function Index() {
 
     // 辅助函数：将消息数组填充到 chat.list
     function populateMessages(messages: any[]) {
+      // 如果 checkpoint 已恢复并填充了 chat.list（典型为 deepsearch 流程，包含完整的
+      // 用户问题 + 助手回复 + 图表/引用），不要清空——loadSessionMessages 的数据
+      // 通常更瘦（只有 user 一条 + 已完成的 assistant 文本），覆盖会丢字段
+      if (hasLoadedCheckpoint.current && chat.list.length > 0) {
+        console.log('[加载消息] 检查点已恢复 chat.list，跳过 DB 消息覆盖')
+        return
+      }
       chat.list.length = 0
       for (const msg of messages) {
         const chatItem: API.ChatItem = {
@@ -1247,8 +1252,13 @@ export default function Index() {
             hasFinalReport: !!checkpoint.final_report,
           })
 
-          // 只恢复已完成或正在运行的研究
-          if (checkpoint.status === 'completed' || checkpoint.status === 'running') {
+          // 恢复所有有内容的检查点状态（含 cancelled/failed/paused 的部分结果）
+          // 后端保存逻辑：每个节点完成后就落库，所以 cancelled/failed 时已写入的部分仍有效
+          if (
+            ['completed', 'running', 'cancelled', 'failed', 'paused'].includes(
+              checkpoint.status,
+            )
+          ) {
             hasLoadedCheckpoint.current = true
 
             // 恢复 UI 状态
@@ -1392,10 +1402,36 @@ export default function Index() {
 
               console.log('[恢复状态] 已恢复聊天记录和研究状态')
             } else if (chat.list.length > 0) {
-              // 消息已通过 loadSessionMessages 加载，只需设置 currentChatItem
-              const lastAssistant = chat.list.filter(m => m.role === ChatRole.Assistant).pop()
-              if (lastAssistant) {
-                // 补充图表数据到已加载的消息
+              // 消息已通过 loadSessionMessages 加载
+              let lastAssistant = chat.list.filter(m => m.role === ChatRole.Assistant).pop()
+              if (!lastAssistant) {
+                // 只有 user 消息（典型场景：研究中途 cancelled/failed 时助手回复未入 chat_messages 表，
+                // 因为 send() 流程是先 streaming 到 target.content，结束后才 addMessage 入库）
+                // 用 checkpoint 数据补一条助手消息
+                const newAssistant: API.ChatItem = {
+                  id: createChatId(),
+                  role: ChatRole.Assistant,
+                  type: ChatType.Deepsearch,
+                  content: checkpoint.final_report || uiState?.streaming_report || '',
+                  reactMode: true,
+                  charts: uiState?.charts || stateJson?.charts || [],
+                }
+                const refs = uiState?.references || stateJson?.references || []
+                if (refs.length > 0) {
+                  newAssistant.reference = refs.map((ref: any, i: number) => ({
+                    id: i + 1,
+                    title: ref.title || ref.source_name || '来源',
+                    link: ref.url || ref.source_url || '',
+                    content: ref.content || ref.summary || '',
+                    source: ref.source_type === 'local' ? 'knowledge' : 'web',
+                  }))
+                }
+                chat.list.push(newAssistant)
+                setCurrentChatItem(newAssistant)
+                lastAssistant = newAssistant
+                console.log('[恢复状态] 补充缺失的助手消息（cancelled/failed 场景，DB 无 assistant 记录）')
+              } else {
+                // 已有助手消息，仅补充图表数据 + 设置类型
                 lastAssistant.charts = uiState?.charts || stateJson?.charts || []
                 lastAssistant.reactMode = true
                 // 关键：设置类型为深度研究，否则 isDeepResearchMode 会是 false

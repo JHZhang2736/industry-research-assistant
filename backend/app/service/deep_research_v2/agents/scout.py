@@ -47,6 +47,24 @@ except ImportError:
         MILVUS_AVAILABLE = False
 
 
+def _ensure_str(value: Any) -> str:
+    """把 LLM 偶尔返回的非字符串字段强制转为字符串。
+
+    LLM 在 JSON 输出里偶尔会把 source_url / source_name 等字段返回成 list、None
+    或其他类型，下游 set()、字典 key、字符串比较都会炸。统一收口：
+    - list: 取首项（空 list 转空字符串）
+    - None: 转空字符串
+    - 其他: str() 强转
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
+    if value is None:
+        return ""
+    return str(value)
+
+
 class DeepScout(BaseAgent):
     """
     深度侦探 - 信息收集专家
@@ -327,8 +345,8 @@ URL: {url}
                 if analysis:
                     # 添加新事实
                     for fact in analysis.get("extracted_facts", []):
-                        content = fact.get("content", "")
-                        source_url = fact.get("source_url", "")
+                        content = _ensure_str(fact.get("content"))
+                        source_url = _ensure_str(fact.get("source_url"))
 
                         if not self._is_duplicate_fact(content, source_url):
                             fact_entry = {
@@ -650,8 +668,8 @@ URL: {url}
             added_facts = 0
             duplicate_facts = 0
             for fact in analysis.get("extracted_facts", []):
-                content = fact.get("content", "")
-                source_url = fact.get("source_url", "")
+                content = _ensure_str(fact.get("content"))
+                source_url = _ensure_str(fact.get("source_url"))
 
                 # 去重检查
                 if self._is_duplicate_fact(content, source_url):
@@ -874,8 +892,8 @@ URL: {url}
             # 提取并添加事实
             added_facts = 0
             for fact in analysis.get("extracted_facts", []):
-                content = fact.get("content", "")
-                source_url = fact.get("source_url", "")
+                content = _ensure_str(fact.get("content"))
+                source_url = _ensure_str(fact.get("source_url"))
 
                 if not self._is_duplicate_fact(content, source_url):
                     fact_entry = {
