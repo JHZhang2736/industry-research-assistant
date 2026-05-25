@@ -192,7 +192,7 @@ class DeepResearchGraph:
         """
         构建 LangGraph 状态图
 
-        拓扑（与 _run_simplified 等价的循环语义）：
+        拓扑：
 
             plan -> research -> analyze_data -> analyze_wizard -> write -> review
             review ─┬─ (COMPLETED 或 iteration >= max) ─> END
@@ -458,7 +458,7 @@ class DeepResearchGraph:
         user_id = state.get("_user_id")
         session_id = state.get("session_id", "")
 
-        # 清除之前的取消标志（与旧 _run_simplified 行为对齐）
+        # 清除之前的取消标志，避免上次任务的残留标志立即触发本次取消
         if session_id:
             clear_cancel_flag(session_id)
 
@@ -477,7 +477,7 @@ class DeepResearchGraph:
             "rewrite": ("rewriting", "重写完成"),
         }
 
-        # UI 状态（保留与 _run_simplified 等价的检查点信息）
+        # UI 状态：前端恢复时需要的研究步骤、搜索结果、图表、知识图谱、流式报告
         ui_state = {
             "research_steps": [],
             "search_results": [],
@@ -517,7 +517,7 @@ class DeepResearchGraph:
                             "content": phase_msg,
                         }
 
-                        # 触发检查点保存（同步等价于 _run_simplified 的 save_checkpoint_async）
+                        # 触发检查点保存（落 PG，含完整后端状态 + UI 状态）
                         cp_event = self._build_checkpoint_event(
                             last_state, user_id, ui_state, node_name
                         )
@@ -544,7 +544,7 @@ class DeepResearchGraph:
             yield {"type": "error", "content": str(e)}
             return
 
-        # 完成事件（等价于 _run_simplified 末尾的 research_complete）
+        # 完成事件：发给前端展示研究结果摘要（final_report、quality_score、统计、references）
         if self.checkpoint_service and session_id:
             try:
                 self.checkpoint_service.update_status(session_id, "completed")
@@ -680,7 +680,7 @@ class DeepResearchGraph:
         return None
 
     def _build_completion_event(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """组装 research_complete 事件（与旧 _run_simplified 末尾等价）"""
+        """组装 research_complete 事件，含 final_report、统计字段、前端友好的 references"""
         facts = state.get("facts", [])
         ui_refs = self._build_ui_references(state)
 
