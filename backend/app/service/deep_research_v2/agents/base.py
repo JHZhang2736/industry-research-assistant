@@ -235,21 +235,18 @@ class BaseAgent(ABC):
             return obj
 
     def add_message(self, state: ResearchState, event_type: str, content: Any) -> None:
-        """
-        添加消息到状态（用于SSE流式输出）
+        """添加消息到状态（用于SSE流式输出）
 
-        三层路径：
-        1. 在 LangGraph 节点上下文中：调用 get_stream_writer() 推事件（custom stream mode）
-        2. 旧路径（_run_simplified 还在的过渡期）：推到 _message_queue
-        3. 都没有：仅追加到 state["messages"]（如 run_sync 单元测试）
-
-        无论哪条路径，都会追加到 state["messages"] 以便日志/检查点保留事件历史。
+        在 LangGraph 节点上下文中通过 get_stream_writer() 推 custom 事件；
+        无论是否在上下文中，都会追加到 state["messages"] 以保留事件历史。
 
         Args:
             state: 研究状态
             event_type: 事件类型
             content: 消息内容
         """
+        from langgraph.config import get_stream_writer
+
         message = {
             "type": event_type,
             "agent": self.name,
@@ -258,30 +255,12 @@ class BaseAgent(ABC):
         }
         state["messages"].append(message)
 
-        # 路径 1：LangGraph custom stream
         try:
-            from langgraph.config import get_stream_writer
             writer = get_stream_writer()
             writer(message)
-            self.logger.debug(f"[stream_writer] Pushed event: {event_type}")
-            return
-        except (ImportError, RuntimeError, KeyError):
-            # ImportError: langgraph 不可用（不应该发生，requirements 已强制）
-            # RuntimeError: 不在 graph 执行上下文中
-            # KeyError: 在非 pregel 的 RunnableConfig 上下文中（如 LCEL 测试）
-            pass
-
-        # 路径 2：旧的消息队列（_run_simplified 兼容）
-        if "_message_queue" in state and state["_message_queue"] is not None:
-            try:
-                state["_message_queue"].put_nowait(message)
-                self.logger.debug(f"[queue] Pushed event: {event_type} (size: {state['_message_queue'].qsize()})")
-                return
-            except Exception as e:
-                self.logger.warning(f"Failed to push message to queue: {e}")
-        else:
-            # 路径 3：什么都没有，仅记录
-            self.logger.debug(f"[no-sink] Event recorded only in state.messages: {event_type}")
+        except (RuntimeError, KeyError):
+            # 不在 graph 执行上下文中（如 run_sync 或单元测试）
+            self.logger.debug(f"No stream writer in context, event recorded only: {event_type}")
 
     def add_log(
         self,
