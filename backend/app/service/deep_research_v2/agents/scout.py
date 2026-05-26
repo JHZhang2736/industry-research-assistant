@@ -19,6 +19,7 @@ from datetime import datetime
 
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
+from ..concurrency import BOCHA_SEM
 
 # 网页文本提取库（可选依赖）
 try:
@@ -1129,13 +1130,15 @@ URL: {url}
 
             self.logger.info(f"Executing Bocha search: {query[:50]}...")
 
-            response = await asyncio.to_thread(
-                requests.post,
-                url,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
+            # Bound concurrent Bocha API calls under free-tier ~10 RPS
+            async with BOCHA_SEM:
+                response = await asyncio.to_thread(
+                    requests.post,
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
 
             if response.status_code != 200:
                 self.logger.error(f"Bocha API error: {response.status_code} - {response.text[:200]}")
