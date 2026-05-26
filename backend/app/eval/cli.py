@@ -10,6 +10,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The service layer uses bare imports (`from service.X`, `from models.X`,
+# `from router.X`) that assume cwd = backend/app/. When invoked as
+# `python -m app.eval.cli` from backend/, sys.path is backend/ only — those
+# imports fail. Prepend backend/app/ here so the runner can build the real
+# DeepResearchV2Service and CheckpointService.
+_APP_DIR = Path(__file__).resolve().parent.parent
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
 from app.eval.judges.deepseek import build_deepseek_judge
 from app.eval.judges.ensemble import EnsembleJudge
 from app.eval.judges.mimo import build_mimo_judge
