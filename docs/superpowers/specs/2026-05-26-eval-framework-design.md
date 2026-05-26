@@ -2,7 +2,7 @@
 
 > 日期：2026-05-26
 > 范围：为 `backend/app/service/deep_research_v2/` 多 agent 工作流构建自动化评测框架
-> 状态：草案 — 待审阅后进入 writing-plans
+> 状态：✅ 已实施（2026-05-26），见 docs/superpowers/plans/2026-05-26-eval-framework-implementation.md
 
 ## 1. 目标与非目标
 
