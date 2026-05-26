@@ -920,12 +920,16 @@ URL: {url}
             "depth": depth
         })
 
-        for query in queries:
-            # 执行搜索
-            results = await self._execute_search(query, count=6)
+        async def _process_one_query(query: str):
+            """Process one search query end-to-end. Safe to run concurrently.
 
+            Mutates state via _ingest_facts (which is asyncio-safe — see its
+            docstring). The recursive call to _execute_deep_search is kept
+            serial within this query's processing to bound recursion fan-out.
+            """
+            results = await self._execute_search(query, count=6)
             if not results:
-                continue
+                return
 
             # 立即发送搜索结果供前端展示（增量）
             search_results_for_ui = [
@@ -935,7 +939,7 @@ URL: {url}
                     "source": r.get("site_name", "未知来源"),
                     "url": r.get("url", ""),
                     "snippet": r.get("summary", "") or r.get("snippet", ""),
-                    "date": r.get("date", "")
+                    "date": r.get("date", ""),
                 }
                 for r in results[:5]
             ]
@@ -943,7 +947,7 @@ URL: {url}
                 "results": search_results_for_ui,
                 "isIncremental": True,
                 "searchType": type_labels.get(search_type, search_type),
-                "depth": depth
+                "depth": depth,
             })
 
             # 分析结果
@@ -957,28 +961,44 @@ URL: {url}
             )
 
             if not analysis:
-                continue
+                return
 
-            # 提取并添加事实（含数据点） — 抽出 _ingest_facts helper 便于并行调用
+            # 提取并添加事实（含数据点）
             added_facts = self._ingest_facts(
                 state, analysis, section_id, query, search_type, depth
             )
 
-            self.logger.info(f"Deep search ({search_type}, depth={depth}): +{added_facts} facts for query '{query[:30]}...'")
+            self.logger.info(
+                f"Deep search ({search_type}, depth={depth}): "
+                f"+{added_facts} facts for query '{query[:30]}...'"
+            )
 
-            # 如果发现更多需要追溯的线索，继续递归（但不超过max_depth）
+            # 递归更深层线索（深度受 max_depth 控）
             if depth < max_depth:
                 further_tracing = analysis.get("further_tracing_queries", [])
                 if further_tracing:
                     self.add_message(state, "thought", {
                         "agent": self.name,
-                        "content": f"发现更深层线索 (深度{depth+1}): {', '.join(further_tracing[:2])}"
+                        "content": f"发现更深层线索 (深度{depth+1}): {', '.join(further_tracing[:2])}",
                     })
                     await self._execute_deep_search(
                         state, section_id, further_tracing[:2],
                         search_type, hypotheses,
-                        depth=depth + 1, max_depth=max_depth
+                        depth=depth + 1, max_depth=max_depth,
                     )
+
+        # 并行处理本层所有 query（每 query 内部仍按原顺序：search → analyze → ingest）
+        results_or_excs = await asyncio.gather(
+            *[_process_one_query(q) for q in queries],
+            return_exceptions=True,
+        )
+        errs = [r for r in results_or_excs if isinstance(r, Exception)]
+        if errs:
+            self.logger.warning(
+                f"[Scout._execute_deep_search] {len(errs)}/{len(queries)} "
+                f"queries failed (depth={depth}): "
+                f"{[type(e).__name__ for e in errs[:3]]}"
+            )
 
     async def _analyze_deep_search_results(
         self,
