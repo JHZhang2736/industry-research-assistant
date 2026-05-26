@@ -16,6 +16,7 @@ from datetime import datetime
 from openai import OpenAI
 
 from ..state import ResearchState, AgentLog
+from ..concurrency import get_llm_semaphore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
@@ -109,10 +110,13 @@ class BaseAgent(ABC):
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
 
-            response = await asyncio.to_thread(
-                self.client.chat.completions.create,
-                **kwargs
-            )
+            # Bound concurrent in-flight LLM calls per provider to stay under QPM
+            sem = get_llm_semaphore(getattr(self.client, "base_url", "") or "")
+            async with sem:
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    **kwargs
+                )
 
             content = response.choices[0].message.content
             duration = int((time.time() - start_time) * 1000)
