@@ -82,11 +82,24 @@ class BaseAgent(ABC):
         """
         start_time = time.time()
 
+        # Inject current date banner so the LLM knows what "today" / "recent" / "latest"
+        # means at runtime. Without this, models default to their training-data
+        # snapshot (often 2024) and produce stale references / outdated framing.
+        _today = datetime.now()
+        date_banner = (
+            f"# 当前日期\n"
+            f"今天是 {_today:%Y 年 %m 月 %d 日}（{_today.year} 年）。"
+            f'文中所有 "今年" / "近期" / "最新" / "当前" 等时间指称均以此日期为准。'
+            f'不要默认 prompt 示例里的年份（如 2024）就是"当前年份"——示例只是格式样例。'
+            f"\n\n"
+        )
+        system_prompt_with_date = date_banner + (system_prompt or "")
+
         try:
             kwargs = {
                 "model": self.model,
                 "messages": [
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": system_prompt_with_date},
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": temperature,
