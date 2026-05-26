@@ -341,7 +341,9 @@ class DataAnalyst(BaseAgent):
             system_prompt="你是专业的数据分析师，擅长从文本中提取结构化数据。请输出JSON格式。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="extract_data",
         )
 
         result = self.parse_json_response(response)
@@ -381,7 +383,9 @@ class DataAnalyst(BaseAgent):
             system_prompt="你是知识图谱专家，擅长从文本中提取实体和关系。请输出JSON格式。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="build_knowledge_graph",
         )
 
         result = self.parse_json_response(response)
@@ -428,7 +432,9 @@ class DataAnalyst(BaseAgent):
             system_prompt="你是数据可视化专家，擅长生成ECharts图表配置。请输出JSON格式。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.3
+            temperature=0.3,
+            state=state,
+            action="generate_charts",
         )
 
         result = self.parse_json_response(response)
@@ -474,7 +480,9 @@ class DataAnalyst(BaseAgent):
             system_prompt="你是数据分析师，提取关键数据。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="analyze_for_section",
         )
 
         return self.parse_json_response(response)

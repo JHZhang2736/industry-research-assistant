@@ -86,7 +86,8 @@ class AgentsConfig:
 class ResearchConfig:
     """研究流程配置"""
     # 最大迭代次数（审核-修订循环）
-    max_iterations: int = 1
+    # 设为 3：让 Critic 至少有一轮 revise 机会，避免 critic_feedback 全部 resolved=False
+    max_iterations: int = 3
 
     # 每个章节最大搜索数量
     max_searches_per_section: int = 3

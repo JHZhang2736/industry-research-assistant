@@ -402,7 +402,9 @@ df = df.dropna()
         response = await self.call_llm(
             system_prompt="你是专业的数据分析师，擅长Python数据处理和可视化。",
             user_prompt=prompt,
-            json_mode=True
+            json_mode=True,
+            state=state,
+            action="analyze_data",
         )
 
         # ===== 详细日志: LLM原始响应 =====
@@ -575,7 +577,7 @@ df = df.dropna()
             self.logger.info(f"Attempting code self-correction (retry {retries + 1}/{max_retries})")
 
             # 调用LLM修复代码
-            fixed_result = await self._fix_code(current_code, error, stdout)
+            fixed_result = await self._fix_code(current_code, error, stdout, state=state)
 
             if fixed_result and isinstance(fixed_result, dict) and fixed_result.get("fixed_code"):
                 fixed_code = fixed_result["fixed_code"]
@@ -609,7 +611,7 @@ df = df.dropna()
             "final_code": current_code
         }
 
-    async def _fix_code(self, code: str, error: str, stdout: str) -> Optional[Dict]:
+    async def _fix_code(self, code: str, error: str, stdout: str, state: Optional[ResearchState] = None) -> Optional[Dict]:
         """调用LLM修复代码"""
         prompt = self.CODE_FIX_PROMPT.format(
             code=code,
@@ -622,7 +624,9 @@ df = df.dropna()
                 system_prompt="你是Python代码调试专家，擅长分析错误并修复代码。",
                 user_prompt=prompt,
                 json_mode=True,
-                temperature=0.2
+                temperature=0.2,
+                state=state,
+                action="fix_code",
             )
             return self.parse_json_response(response)
         except Exception as e:
@@ -658,7 +662,8 @@ df = df.dropna()
                 topic=section["title"],
                 data=section_data,
                 chart_type="bar" if section.get("section_type") == "quantitative" else "line",
-                title=f"{section['title']}分析"
+                title=f"{section['title']}分析",
+                state=state,
             )
 
             if chart_config and chart_config.get("code"):
@@ -725,7 +730,8 @@ df = df.dropna()
         topic: str,
         data: List[Dict],
         chart_type: str,
-        title: str
+        title: str,
+        state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """生成图表代码"""
         data_str = json.dumps(data, ensure_ascii=False, indent=2)
@@ -740,7 +746,9 @@ df = df.dropna()
         response = await self.call_llm(
             system_prompt="你是数据可视化专家。",
             user_prompt=prompt,
-            json_mode=True
+            json_mode=True,
+            state=state,
+            action="generate_chart_code",
         )
 
         return self.parse_json_response(response)
@@ -1097,6 +1105,8 @@ df = df.dropna()
         import matplotlib
         matplotlib.use('Agg')  # 非交互式后端
         import matplotlib.pyplot as plt
+        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # 或者 'SimHei'
+        plt.rcParams['axes.unicode_minus'] = False  # 正常显示负号
 
         # 预导入所有允许的模块
         import pandas as pd

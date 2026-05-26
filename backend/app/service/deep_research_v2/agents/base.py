@@ -60,7 +60,10 @@ class BaseAgent(ABC):
         user_prompt: str,
         json_mode: bool = True,
         temperature: float = 0.3,
-        max_tokens: int = 16000  # 拉满到最大值
+        max_tokens: int = 16000,  # 拉满到最大值
+        *,
+        state: Optional["ResearchState"] = None,
+        action: str = "llm_call",
     ) -> str:
         """
         调用 LLM
@@ -71,6 +74,8 @@ class BaseAgent(ABC):
             json_mode: 是否强制JSON输出
             temperature: 温度参数
             max_tokens: 最大token数
+            state: 研究状态（如果提供，会自动把本次调用写入 state["logs"]）
+            action: 本次调用的标识符（用于日志/成本统计）
 
         Returns:
             LLM 响应文本
@@ -100,6 +105,26 @@ class BaseAgent(ABC):
             duration = int((time.time() - start_time) * 1000)
 
             self.logger.info(f"LLM call completed in {duration}ms, response length: {len(content)}")
+
+            # Auto-log LLM call to state["logs"] for downstream eval/cost tracking
+            if state is not None and "logs" in state:
+                tokens_used = 0
+                try:
+                    usage = getattr(response, "usage", None)
+                    if usage is not None:
+                        tokens_used = int(getattr(usage, "total_tokens", 0) or 0)
+                except Exception:
+                    tokens_used = 0
+                state["logs"].append({
+                    "timestamp": datetime.now().isoformat(),
+                    "agent": self.name,
+                    "action": action,
+                    "input_summary": (system_prompt or "")[:120],
+                    "output_summary": (content or "")[:120],
+                    "duration_ms": duration,
+                    "tokens_used": tokens_used,
+                    "model": self.model,
+                })
 
             return content
 

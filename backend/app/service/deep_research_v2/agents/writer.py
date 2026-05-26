@@ -57,7 +57,13 @@ class LeadWriter(BaseAgent):
 1. **专业性**：使用行业术语，体现专业深度
 2. **逻辑性**：论点清晰，论据充分，层层递进
 3. **数据支撑**：关键观点必须有数据或事实支撑
-4. **引用规范**：使用可点击链接格式 [来源名称](URL)，如 [艾瑞咨询](https://www.iresearch.cn)
+4. **引用规范（必须双格式）**：
+   - 每个引用数据/事实之后必须同时使用两种格式：
+     - markdown 链接（人可读）：`[来源名](URL)`
+     - 数字脚注（机器可识别）：`[N]`，N 是 references 列表中该来源的 1-based 索引
+   - 示例：`市场规模达 5000 亿元（[艾瑞咨询](https://www.iresearch.cn) [3]）`
+   - 多个来源同一句：`...增长 30%（[1,2]）` 或 `...（[1-3]）`
+   - **每个章节至少包含 3 处 [N] 脚注**，否则视为引用不足
 5. **图表整合**：在合适位置插入图表引用 ![图表标题](chart_id)
 6. **字数控制**：本章节 500-1000 字
 7. **不要重复标题**：正文开头不要再写章节标题
@@ -75,9 +81,9 @@ class LeadWriter(BaseAgent):
 ```
 
 ## 写作风格示例
-- 好的开头："2024年，中国AI芯片市场正经历深刻变革。根据[IDC数据](https://www.idc.com)，市场规模达到..."
+- 好的开头："2024年，中国AI芯片市场正经历深刻变革。根据[IDC数据](https://www.idc.com) [1]，市场规模达到..."
 - 避免的开头："关于AI芯片，首先我们来看..."
-- 数据引用示例："市场规模达5000亿元（[艾瑞咨询报告](https://www.iresearch.cn/report)）"
+- 数据引用示例："市场规模达 5000 亿元（[艾瑞咨询报告](https://www.iresearch.cn/report) [2]）"
 
 开始撰写："""
 
@@ -106,10 +112,12 @@ class LeadWriter(BaseAgent):
 - 三级标题：1.1.1、1.1.2...（如：1.1.1 全球市场）
 - **禁止标题重复**：每个标题必须唯一，不要在正文中重复章节标题
 
-### 2. 引用格式规则（确保可点击）
-- 行内引用：使用 [来源名称](URL) 格式，如 [艾瑞咨询](https://www.iresearch.cn)
-- 数据引用：在数据后标注来源，如"市场规模达5000亿元（[IDC报告](https://www.idc.com)）"
-- 文末参考文献：使用有序列表 + 可点击链接格式
+### 2. 引用格式规则（双格式：可点击链接 + 数字脚注）
+- 行内引用：同时使用两种格式 `[来源名](URL) [N]`，N 是文末参考文献中该来源的 1-based 编号
+- 数据引用示例：`市场规模达 5000 亿元（[IDC报告](https://www.idc.com) [1]）`
+- 多源汇总：`...增长 30%（[1,2]）` 或 `...（[1-3]）`
+- **必须严格保留章节中已有的 [N] 脚注**，不要在整合时删除
+- 文末参考文献必须按 `[N]` 编号顺序列出，编号要与正文里的 [N] 一一对应
 
 ### 3. 报告结构规范
 - 不要在报告开头使用 # 一级标题
@@ -322,7 +330,9 @@ class LeadWriter(BaseAgent):
             user_prompt=prompt,
             json_mode=True,
             temperature=0.4,
-            max_tokens=16000  # 拉满到最大值
+            max_tokens=16000,  # 拉满到最大值
+            state=state,
+            action="write_section",
         )
 
         result = self.parse_json_response(response)
@@ -394,7 +404,9 @@ class LeadWriter(BaseAgent):
             user_prompt=prompt,
             json_mode=True,
             temperature=0.3,
-            max_tokens=16000  # 拉满到最大值
+            max_tokens=16000,  # 拉满到最大值
+            state=state,
+            action="synthesize_report",
         )
 
         result = self.parse_json_response(response)
@@ -463,7 +475,9 @@ class LeadWriter(BaseAgent):
             user_prompt=prompt,
             json_mode=True,
             temperature=0.3,
-            max_tokens=16000  # 拉满到最大值
+            max_tokens=16000,  # 拉满到最大值
+            state=state,
+            action="revise_report",
         )
 
         result = self.parse_json_response(response)

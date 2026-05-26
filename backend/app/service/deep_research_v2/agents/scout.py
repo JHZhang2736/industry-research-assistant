@@ -339,7 +339,8 @@ URL: {url}
                 analysis = await self._analyze_supplementary_results(
                     state["query"],
                     query,
-                    results
+                    results,
+                    state=state,
                 )
 
                 if analysis:
@@ -482,7 +483,8 @@ URL: {url}
         self,
         original_query: str,
         search_query: str,
-        results: List[Dict]
+        results: List[Dict],
+        state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """分析补充搜索结果"""
         results_text = []
@@ -526,7 +528,9 @@ URL: {url}
             system_prompt="你是专业的信息提取专家，擅长从搜索结果中提取结构化信息。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="analyze_supplementary_results",
         )
 
         return self.parse_json_response(response)
@@ -660,7 +664,8 @@ URL: {url}
             state["query"],
             section,
             all_results,
-            hypotheses=state.get("hypotheses", [])
+            hypotheses=state.get("hypotheses", []),
+            state=state,
         )
 
         if analysis:
@@ -883,7 +888,8 @@ URL: {url}
                 query,
                 results,
                 search_type,
-                hypotheses
+                hypotheses,
+                state=state,
             )
 
             if not analysis:
@@ -956,7 +962,8 @@ URL: {url}
         search_query: str,
         results: List[Dict],
         search_type: str,
-        hypotheses: List[Dict]
+        hypotheses: List[Dict],
+        state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """分析深度搜索结果"""
         results_text = []
@@ -1014,7 +1021,9 @@ URL: {url}
             system_prompt="你是专业的信息验证专家，擅长从搜索结果中提取权威信息并追溯原始来源。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="analyze_deep_search_results",
         )
 
         return self.parse_json_response(response)
@@ -1146,7 +1155,8 @@ URL: {url}
         query: str,
         section: Dict,
         results: List[Dict],
-        hypotheses: List[Dict] = None
+        hypotheses: List[Dict] = None,
+        state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """分析搜索结果"""
         if not results:
@@ -1184,12 +1194,14 @@ URL: {r.get('url', '')}
             system_prompt="你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
             user_prompt=prompt,
             json_mode=True,
-            temperature=0.2
+            temperature=0.2,
+            state=state,
+            action="analyze_search_results",
         )
 
         return self.parse_json_response(response)
 
-    async def deep_read_url(self, url: str, title: str, query: str) -> Optional[Dict]:
+    async def deep_read_url(self, url: str, title: str, query: str, state: Optional[ResearchState] = None) -> Optional[Dict]:
         """
         深度阅读网页内容
 
@@ -1224,7 +1236,9 @@ URL: {r.get('url', '')}
             llm_response = await self.call_llm(
                 system_prompt="你是专业的文档分析师。",
                 user_prompt=prompt,
-                json_mode=True
+                json_mode=True,
+                state=state,
+                action="deep_read_url",
             )
 
             return self.parse_json_response(llm_response)

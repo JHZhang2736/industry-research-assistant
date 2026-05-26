@@ -324,7 +324,9 @@ class CriticMaster(BaseAgent):
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
-            max_tokens=16000  # 拉满到最大值
+            max_tokens=16000,  # 拉满到最大值
+            state=state,
+            action="review_content",
         )
         self.logger.info(f"[CriticMaster] LLM 响应长度: {len(response)}")
 
@@ -349,7 +351,9 @@ class CriticMaster(BaseAgent):
         response = await self.call_llm(
             system_prompt="你是最终质量把关人。",
             user_prompt=prompt,
-            json_mode=True
+            json_mode=True,
+            state=state,
+            action="final_check",
         )
 
         return self.parse_json_response(response)

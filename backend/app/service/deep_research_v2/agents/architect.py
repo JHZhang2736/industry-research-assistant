@@ -199,7 +199,9 @@ class ChiefArchitect(BaseAgent):
                 user_prompt=prompt,
                 json_mode=True,
                 temperature=0.3,
-                max_tokens=16000  # 拉满到最大值
+                max_tokens=16000,  # 拉满到最大值
+                state=state,
+                action="initial_planning",
             )
 
             # Debug: 记录原始响应
@@ -336,7 +338,9 @@ class ChiefArchitect(BaseAgent):
         response = await self.call_llm(
             system_prompt="你是总架构师，需要判断是否需要调整研究计划。",
             user_prompt=prompt,
-            json_mode=True
+            json_mode=True,
+            state=state,
+            action="check_revision",
         )
 
         result = self.parse_json_response(response)
