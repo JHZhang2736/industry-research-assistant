@@ -818,6 +818,69 @@ URL: {url}
         # 更新章节状态
         section["status"] = "researching"
 
+    def _ingest_facts(
+        self,
+        state: ResearchState,
+        analysis: Dict[str, Any],
+        section_id: str,
+        query: str,
+        search_type: str,
+        depth: int,
+    ) -> int:
+        """Append extracted facts + data_points from one analysis result into state.
+
+        Returns number of new facts added (after dedup). Pure local mutation;
+        safe to call concurrently from multiple coroutines because:
+          - state['facts']/['data_points'] are list.append (atomic in asyncio)
+          - hypothesis evidence is appended via setdefault (atomic)
+          - _is_duplicate_fact reads then writes; under asyncio single-thread,
+            no other coroutine can interleave between read and append (no await
+            inside the dedup check).
+        """
+        added_facts = 0
+        for fact in analysis.get("extracted_facts", []):
+            content = _ensure_str(fact.get("content"))
+            source_url = _ensure_str(fact.get("source_url"))
+
+            if not self._is_duplicate_fact(content, source_url):
+                fact_entry = {
+                    "id": f"fact_{uuid.uuid4().hex[:8]}",
+                    "content": content,
+                    "source_url": source_url,
+                    "source_name": fact.get("source_name", ""),
+                    "source_type": fact.get("source_type", "news"),
+                    "credibility_score": fact.get("credibility_score", 0.5),
+                    "related_sections": [section_id],
+                    "search_depth": depth,
+                    "search_type": search_type,
+                }
+                state["facts"].append(fact_entry)
+                added_facts += 1
+
+                hypothesis_support = fact.get("hypothesis_support")
+                if hypothesis_support and fact.get("related_hypothesis"):
+                    h_id = fact["related_hypothesis"]
+                    for h in state.get("hypotheses", []):
+                        if h.get("id") == h_id:
+                            if hypothesis_support == "supports":
+                                h.setdefault("evidence_for", []).append(content[:100])
+                            elif hypothesis_support == "refutes":
+                                h.setdefault("evidence_against", []).append(content[:100])
+
+        for dp in analysis.get("data_points", []):
+            state["data_points"].append({
+                "id": f"dp_{uuid.uuid4().hex[:8]}",
+                "name": dp.get("name"),
+                "value": dp.get("value"),
+                "unit": dp.get("unit", ""),
+                "year": dp.get("year"),
+                "source": dp.get("source", query),
+                "confidence": dp.get("confidence", 0.7),
+                "search_depth": depth,
+            })
+
+        return added_facts
+
     async def _execute_deep_search(
         self,
         state: ResearchState,
@@ -895,50 +958,10 @@ URL: {url}
             if not analysis:
                 continue
 
-            # 提取并添加事实
-            added_facts = 0
-            for fact in analysis.get("extracted_facts", []):
-                content = _ensure_str(fact.get("content"))
-                source_url = _ensure_str(fact.get("source_url"))
-
-                if not self._is_duplicate_fact(content, source_url):
-                    fact_entry = {
-                        "id": f"fact_{uuid.uuid4().hex[:8]}",
-                        "content": content,
-                        "source_url": source_url,
-                        "source_name": fact.get("source_name", ""),
-                        "source_type": fact.get("source_type", "news"),
-                        "credibility_score": fact.get("credibility_score", 0.5),
-                        "related_sections": [section_id],
-                        "search_depth": depth,
-                        "search_type": search_type
-                    }
-                    state["facts"].append(fact_entry)
-                    added_facts += 1
-
-                    # 更新假设证据（如果有）
-                    hypothesis_support = fact.get("hypothesis_support")
-                    if hypothesis_support and fact.get("related_hypothesis"):
-                        h_id = fact["related_hypothesis"]
-                        for h in state.get("hypotheses", []):
-                            if h.get("id") == h_id:
-                                if hypothesis_support == "supports":
-                                    h.setdefault("evidence_for", []).append(content[:100])
-                                elif hypothesis_support == "refutes":
-                                    h.setdefault("evidence_against", []).append(content[:100])
-
-            # 提取数据点
-            for dp in analysis.get("data_points", []):
-                state["data_points"].append({
-                    "id": f"dp_{uuid.uuid4().hex[:8]}",
-                    "name": dp.get("name"),
-                    "value": dp.get("value"),
-                    "unit": dp.get("unit", ""),
-                    "year": dp.get("year"),
-                    "source": dp.get("source", query),
-                    "confidence": dp.get("confidence", 0.7),
-                    "search_depth": depth
-                })
+            # 提取并添加事实（含数据点） — 抽出 _ingest_facts helper 便于并行调用
+            added_facts = self._ingest_facts(
+                state, analysis, section_id, query, search_type, depth
+            )
 
             self.logger.info(f"Deep search ({search_type}, depth={depth}): +{added_facts} facts for query '{query[:30]}...'")
 
