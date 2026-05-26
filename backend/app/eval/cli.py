@@ -74,10 +74,10 @@ async def _load_final_state(session_id: str) -> dict | None:
         from app.service.checkpoint_service import CheckpointService
 
     svc = CheckpointService()
-    cp = await svc.get_latest(session_id)
-    if cp is None:
-        return None
-    return cp.get("state") if isinstance(cp, dict) else getattr(cp, "state", None)
+    # CheckpointService.load_checkpoint is sync; wrap to keep this coroutine
+    # without blocking the event loop. Returns the ResearchState dict directly
+    # (the `state_json` column), or None if no checkpoint exists yet.
+    return await asyncio.to_thread(svc.load_checkpoint, session_id)
 
 
 def _build_service():
