@@ -73,7 +73,9 @@ PRICING_RMB_PER_M_TOKENS: dict[str, tuple[float, float]] = {
 
 # Eval suite defaults
 DEFAULT_CONCURRENCY = 5
-DEFAULT_RESEARCH_TIMEOUT_SEC = 600
+# Real research can take 20-30 min on hard queries (multi-agent + retries + chart codegen).
+# Override via env: EVAL_RESEARCH_TIMEOUT_SEC=2400 for 40min hard cap.
+DEFAULT_RESEARCH_TIMEOUT_SEC = int(os.getenv("EVAL_RESEARCH_TIMEOUT_SEC", "1800"))
 DEFAULT_JUDGE_TIMEOUT_SEC = 60
 JUDGE_RETRY_ATTEMPTS = 3
 URL_CHECK_TIMEOUT_SEC = 5
