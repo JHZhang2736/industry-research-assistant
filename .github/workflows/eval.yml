@@ -1,0 +1,70 @@
+name: Eval
+
+on:
+  pull_request:
+    paths:
+      - 'backend/app/eval/**'
+      - 'backend/requirements.txt'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite name (full / mini / <path>)'
+        default: 'full'
+        required: true
+      concurrency:
+        description: 'Parallel runs'
+        default: '5'
+        required: true
+
+jobs:
+  unit-tests:
+    name: Eval unit tests (mock, no network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+      - name: Run eval unit tests
+        working-directory: backend
+        run: |
+          pytest app/eval/tests/ -v --tb=short
+
+  eval-suite:
+    name: Run full eval suite
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      XIAOMI_API_KEY: ${{ secrets.XIAOMI_API_KEY }}
+      BOCHA_API_KEY: ${{ secrets.BOCHA_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_PROJECT: industry-research-eval
+      POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Run eval
+        working-directory: backend
+        run: |
+          python -m app.eval.cli run \
+            --suite ${{ inputs.suite }} \
+            --concurrency ${{ inputs.concurrency }}
+      - name: Upload markdown report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: docs/eval-results/*
