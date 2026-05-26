@@ -20,13 +20,12 @@ from router.knowledge_router import router as knowledge_router
 from router.attachment_router import router as attachment_router
 from router.memory_router import router as memory_router
 from router.database_router import router as database_router
-from router.news_router import router as news_router
 from core.database import engine, Base
 # 导入所有模型以确保它们被注册
 from models import (
     User, ChatSession, ChatMessage, ChatAttachment, LongTermMemory,
     KnowledgeBase, Document, IndustryStats, CompanyData, PolicyData,
-    ResearchCheckpoint, IndustryNews, BiddingInfo, NewsCollectionTask
+    ResearchCheckpoint
 )
 
 # 创建所有数据表（如果不存在）
@@ -36,32 +35,14 @@ Base.metadata.create_all(bind=engine)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    # 启动时执行
     logger.info("应用启动中...")
-
-    # 初始化定时任务调度器并检查数据
-    try:
-        from service.scheduler_service import init_scheduler_and_check_data
-        await init_scheduler_and_check_data()
-        logger.info("定时任务调度器启动成功")
-    except Exception as e:
-        logger.error(f"定时任务调度器启动失败: {e}")
-
     yield
-
-    # 关闭时执行
     logger.info("应用关闭中...")
-    try:
-        from service.scheduler_service import get_scheduler_service
-        scheduler = get_scheduler_service()
-        scheduler.stop()
-    except Exception as e:
-        logger.error(f"定时任务调度器关闭失败: {e}")
 
 
 app = FastAPI(
-    title="行业信息助手 API",
-    description="基于 AI Agent 的行业信息助手系统",
+    title="深度研究助手 API",
+    description="基于 LangGraph 多 Agent 协同的 AI 深度研究助手",
     version="2.0.0",
     lifespan=lifespan
 )
@@ -86,7 +67,7 @@ app.include_router(document_router)
 app.include_router(search_router)
 app.include_router(chat_router)
 app.include_router(research_router)
-app.include_router(news_router)
+
 
 @app.get("/hello")
 async def hello_world():

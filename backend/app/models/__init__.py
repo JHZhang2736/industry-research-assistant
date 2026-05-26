@@ -5,7 +5,6 @@ from .chat import ChatSession, ChatMessage, ChatAttachment, LongTermMemory
 from .knowledge import KnowledgeBase, Document
 from .industry_data import IndustryStats, CompanyData, PolicyData
 from .research import ResearchCheckpoint
-from .news import IndustryNews, BiddingInfo, NewsCollectionTask
 
 __all__ = [
     "User",
@@ -19,7 +18,4 @@ __all__ = [
     "CompanyData",
     "PolicyData",
     "ResearchCheckpoint",
-    "IndustryNews",
-    "BiddingInfo",
-    "NewsCollectionTask",
 ]
