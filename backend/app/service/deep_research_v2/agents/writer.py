@@ -274,6 +274,16 @@ class LeadWriter(BaseAgent):
                 f"to write: {[type(e).__name__ for e in errs[:3]]}"
             )
 
+        drafted_count = len(unfinished) - len(errs)
+        # If every chapter failed, raise the first error so the graph can emit
+        # an `error` event instead of producing a blank/synthesized report.
+        if unfinished and drafted_count == 0:
+            first_err = next(r for r in results if isinstance(r, Exception))
+            raise RuntimeError(
+                f"All {len(unfinished)} sections failed to write. "
+                f"First error: {type(first_err).__name__}: {first_err}"
+            )
+
         # 整合报告
         await self._synthesize_report(state)
 
@@ -285,7 +295,7 @@ class LeadWriter(BaseAgent):
             "subtitle": "撰写研究报告",
             "status": "completed",
             "stats": {
-                "sections_count": len(state["outline"]),
+                "sections_count": drafted_count,
                 "word_count": word_count,
                 "references_count": len(state.get("references", []))
             }
