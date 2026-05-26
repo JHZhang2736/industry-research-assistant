@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -54,16 +54,6 @@ def sample_state() -> dict:
             "messages": [],
         }
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-@pytest.fixture
-def mock_openai_client():
-    """Mock for openai.AsyncOpenAI."""
-    client = MagicMock()
-    client.chat = MagicMock()
-    client.chat.completions = MagicMock()
-    client.chat.completions.create = AsyncMock()
-    return client
 
 
 def make_openai_response(content: str) -> Any:

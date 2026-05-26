@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from openai import APIConnectionError
 
 from app.eval.judges.base import JudgeClient, parse_judge_response
 from app.eval.tests.conftest import make_openai_response
@@ -45,6 +47,21 @@ def test_parse_response_raises_when_no_number():
         parse_judge_response("totally garbage text")
 
 
+def test_parse_response_rejects_out_of_range_high():
+    # JSON has score=99 (out of [0,10]); JSON path rejects it,
+    # regex fallback finds no word-bounded 0-10 number in the raw text → ValueError.
+    # Without the range check, the JSON path would have returned 99.0 silently.
+    with pytest.raises(ValueError):
+        parse_judge_response('{"score": 99, "reasoning": "x"}')
+
+
+def test_parse_response_negative_score_falls_through_to_regex():
+    # JSON has score=-1 (out of [0,10]); JSON path rejects it,
+    # regex fallback finds "1" in the raw text → 1.0.
+    out = parse_judge_response('{"score": -1, "reasoning": "x"}')
+    assert out[0] == 1.0
+
+
 @pytest.mark.asyncio
 async def test_call_judge_happy_path(cfg, monkeypatch):
     monkeypatch.setenv("TEST_KEY", "fake-key")
@@ -77,8 +94,10 @@ async def test_call_judge_api_error_retried_then_fails(cfg, monkeypatch):
     monkeypatch.setenv("TEST_KEY", "fake-key")
     client = JudgeClient(cfg)
 
+    # Use an openai SDK exception type that the retry filter actually matches.
+    fake_request = httpx.Request("POST", "https://example.com/v1/chat/completions")
     client._client.chat.completions.create = AsyncMock(
-        side_effect=RuntimeError("boom")
+        side_effect=APIConnectionError(message="boom", request=fake_request)
     )
 
     score = await client.call_judge("prompt")

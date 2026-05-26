@@ -6,7 +6,13 @@ import logging
 import re
 
 from aiolimiter import AsyncLimiter
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -40,6 +46,8 @@ def parse_judge_response(raw: str) -> tuple[float, str]:
         obj = json.loads(text)
         if isinstance(obj, dict) and "score" in obj:
             score = float(obj["score"])
+            if not (0.0 <= score <= 10.0):
+                raise ValueError(f"score {score} outside [0, 10]")
             reasoning = str(obj.get("reasoning", ""))
             return score, reasoning
     except (json.JSONDecodeError, ValueError, TypeError):
@@ -74,7 +82,7 @@ class JudgeClient:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(JUDGE_RETRY_ATTEMPTS),
                 wait=wait_exponential(multiplier=1, min=1, max=16),
-                retry=retry_if_exception_type((RuntimeError, ConnectionError, TimeoutError)),
+                retry=retry_if_exception_type((APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)),
                 reraise=True,
             ):
                 with attempt:
@@ -113,5 +121,3 @@ class JudgeClient:
                 failed=True,
                 error=str(e),
             )
-        # Should be unreachable
-        return JudgeScore(judge_name=self.cfg.name, score=None, reasoning="", failed=True, error="unreachable")

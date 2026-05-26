@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path as _Path
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,10 @@ URL_CHECK_TIMEOUT_SEC = 5
 LOW_CONFIDENCE_STD_THRESHOLD = 2.0
 
 # SQLite storage path
-SQLITE_PATH = os.getenv("EVAL_SQLITE_PATH", "backend/app/eval/.eval.db")
+SQLITE_PATH = os.getenv(
+    "EVAL_SQLITE_PATH",
+    str(_Path(__file__).parent / ".eval.db"),
+)
 
 # LangSmith (optional)
 LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT", "industry-research-eval")
