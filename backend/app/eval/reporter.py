@@ -95,6 +95,7 @@ class Reporter:
                 for n in evaluator_names
             )
             q = c.case.query[:30] + ("…" if len(c.case.query) > 30 else "")
+            q = q.replace("|", "\\|")
             md.append(f"| `{c.case.id}` | {q} | {cells} |")
         md.append("")
 

@@ -59,6 +59,8 @@ class EvalStorage:
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()

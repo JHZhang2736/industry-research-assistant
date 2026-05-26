@@ -67,3 +67,23 @@ def test_reporter_marks_failed_cases(tmp_path: Path):
     assert "## Failed Cases" in md
     assert "q002" in md
     assert "TimeoutError" in md
+
+
+def test_reporter_escapes_pipe_in_query(tmp_path: Path):
+    cases = [
+        make_case_result("q001", {"relevance": 7.0}),
+    ]
+    # Override query to contain a pipe
+    cases[0].case = EvalCase(id="q001", query="A | B sector", category="x", difficulty="easy")
+    r = Reporter(out_dir=str(tmp_path))
+    paths = r.write(
+        run_id="run-pipe",
+        suite="t",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=cases,
+        langsmith_url=None,
+    )
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "A \\| B sector" in md  # escaped pipe
