@@ -316,6 +316,10 @@ class DeepResearchGraph:
 
     async def _review_node(self, state: ResearchState) -> Dict[str, Any]:
         """审核节点"""
+        # 记录此刻 in-flight 峰值，便于实施后调优 sem 上限
+        from .concurrency import sem_status
+        logger.info(f"[concurrency] in-flight at review entry: {sem_status()}")
+
         self._maybe_cancel(state)
         self._emit_phase_start("reviewing", "开始审核...")
         logger.info("Executing Review node...")
