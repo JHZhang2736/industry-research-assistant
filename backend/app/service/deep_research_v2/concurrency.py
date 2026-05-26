@@ -12,7 +12,11 @@ Configurable via env:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+
+
+_logger = logging.getLogger(__name__)
 
 
 DASHSCOPE_MAX_INFLIGHT = int(os.getenv("DASHSCOPE_MAX_INFLIGHT", "10"))
@@ -28,12 +32,17 @@ def get_llm_semaphore(base_url: str) -> asyncio.Semaphore:
     """Select the right semaphore for an LLM provider based on its base_url.
 
     Default falls back to DASHSCOPE_SEM (most conservative) when base_url
-    doesn't match a known provider.
+    doesn't match a known provider, with a warning so unknown providers
+    aren't silently throttled like dashscope.
     """
     if "dashscope" in base_url:
         return DASHSCOPE_SEM
     if "deepseek" in base_url:
         return DEEPSEEK_SEM
+    _logger.warning(
+        "Unknown LLM base_url %r; falling back to DASHSCOPE_SEM (default 10 in-flight)",
+        base_url,
+    )
     return DASHSCOPE_SEM
 
 

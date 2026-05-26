@@ -997,7 +997,7 @@ URL: {url}
             self.logger.warning(
                 f"[Scout._execute_deep_search] {len(errs)}/{len(queries)} "
                 f"queries failed (depth={depth}): "
-                f"{[type(e).__name__ for e in errs[:3]]}"
+                f"{[(type(e).__name__, str(e)[:80]) for e in errs[:3]]}"
             )
 
     async def _analyze_deep_search_results(
