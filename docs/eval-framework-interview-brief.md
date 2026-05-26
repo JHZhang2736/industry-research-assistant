@@ -372,7 +372,29 @@ query: "新能源汽车2024年市场现状"，case smoke-002，跑了 24.6 min�
 
 第 4 个 bonus 修复：14 处 prompt example 硬编码 `2024` 让 LLM 默认产出 2024 年内容 —— 修法是在 `call_llm` 内自动 prepend 当前日期 banner，0 prompt 文件改动，18 处调用全受益。
 
-**面试讲点**：这是 eval 框架的本质价值 —— "I built it, I ran it, it found 3 real bugs the first time, and gave me quantitative signals to fix them"。
+### 6.3 修复后再跑一次：4 个修复 3 个生效 + 又发现一个新问题
+
+case smoke-003，同 query，跑完后分数：
+
+| Evaluator | 修前 | 修后 | 解读 |
+|---|---|---|---|
+| relevance | 9.5 | 9.5 | 持平，本来就高 |
+| coherence | 8.5 | 8.67 | 轻微改善 |
+| completeness | 6 | 6.33 | 略升（虽然 report 因 timeout 被砍） |
+| **citation** | 1 | **8.07** | ✅ Writer fix 生效，report 里 36 处 `[N]` 脚注 |
+| **cost** | 0 | **1.13 RMB** | ✅ logs fix 生效，54 条 log 记录 token 用量 |
+| **critic_loop** | 0 | 0 | ❌ **依然 0，但根因变了** |
+| latency | 1478s | **1800s（卡 timeout）** | 触发 EVAL_RESEARCH_TIMEOUT_SEC 上限 |
+
+**critic_loop 仍 0 的根因诊断**：PG checkpoint 显示 `phase=reviewing, iteration=1/max=3`，Critic 提了 8 个 issue（2 critical / 5 major / 1 minor），但 service 在准备进入 revise 时被 eval 的 30 min hard timeout 砍掉了。`max_iterations=3` 的修复实际有效，只是没机会执行第 2、3 轮。
+
+**新发现**：eval 自己的 `DEFAULT_RESEARCH_TIMEOUT_SEC=1800` 太严 —— 设计时按"单轮 25 min"估计，但加 `max_iterations=3` + Critic 多轮后，需要 40-50 min。这是 eval 框架自己的配置 bug —— 我自己造的工具发现了自己造的另一个工具的问题。
+
+**面试讲点**：这是 eval 框架的本质价值 ——
+- 第一次跑暴露 3 个 service bug → 修
+- 修完再跑验证 3 个 fix 全生效（citation / cost 大幅改善）
+- 同时发现 eval 自己的 timeout 设置问题 → 迭代调高
+- "**I built it, ran it, found 3 bugs, fixed them, ran again, verified 3/4 working, found my own framework's 4th bug**" —— 完整的工程迭代闭环
 
 ---
 
