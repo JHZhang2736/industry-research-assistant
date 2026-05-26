@@ -8,6 +8,17 @@ import os
 from dataclasses import dataclass
 from pathlib import Path as _Path
 
+# Load backend/.env so `python -c "..."` and pytest pick up secrets without
+# needing the FastAPI main entry to run. load_dotenv is idempotent and never
+# overrides values already in os.environ, so shell exports still win.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _ENV_PATH = _Path(__file__).resolve().parent.parent.parent / ".env"
+    if _ENV_PATH.exists():
+        _load_dotenv(_ENV_PATH)
+except ImportError:
+    pass
+
 
 @dataclass(frozen=True)
 class JudgeConfig:
