@@ -60,3 +60,12 @@ wordcloud>=1.9.0
 # Utils
 pyyaml>=6.0.0
 python-dateutil>=2.8.0
+
+# Eval framework
+langsmith>=0.1.0
+aiohttp>=3.9
+aiolimiter>=1.1
+tenacity>=8.2
+rich>=13.0
+pytest-asyncio>=0.23
+aresponses>=3.0
