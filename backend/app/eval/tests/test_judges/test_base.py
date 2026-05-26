@@ -86,3 +86,14 @@ async def test_call_judge_api_error_retried_then_fails(cfg, monkeypatch):
     assert "boom" in (score.error or "")
     # tenacity should have retried JUDGE_RETRY_ATTEMPTS times
     assert client._client.chat.completions.create.await_count >= 2
+
+
+def test_all_three_judge_builders_importable():
+    from app.eval.judges.deepseek import build_deepseek_judge
+    from app.eval.judges.mimo import build_mimo_judge
+    from app.eval.judges.qwen import build_qwen_judge
+
+    # Note: these will read env keys; api_key may be None in test env, OK
+    for build in (build_deepseek_judge, build_mimo_judge, build_qwen_judge):
+        client = build()
+        assert client.cfg.name in {"deepseek", "mimo", "qwen"}
