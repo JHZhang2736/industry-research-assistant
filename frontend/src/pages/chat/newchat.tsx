@@ -1,20 +1,15 @@
 
 
 import * as api from '@/api'
-import type { NewsItem, BiddingItem } from '@/api/news'
-import IconNews from '@/assets/layout/news.svg'
 import ComSender, { AttachmentInfo } from '@/components/sender'
 import { useQuery } from '@/router/hook'
 import { deviceState } from '@/store/device'
-import { industryState } from '@/store/industry'
 import { setPageTransport } from '@/utils'
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useSnapshot } from 'valtio'
-import { message, Spin, Tag } from 'antd'
-import { ClockCircleOutlined, EnvironmentOutlined } from '@ant-design/icons'
+import { message } from 'antd'
 import { uniqueId } from 'lodash-es'
-import dayjs from 'dayjs'
 import styles from './new.module.scss'
 import { transportToChatEnter } from './shared'
 
@@ -22,114 +17,18 @@ export default function NewChat() {
   const query = useQuery()
   const navigate = useNavigate()
   const device = useSnapshot(deviceState)
-  const industry = useSnapshot(industryState)
 
-  // 获取当前行业名称
-  const currentIndustryName = useMemo(() => {
-    const current = industry.industries.find(i => i.id === industry.currentIndustryId)
-    return current?.name || '行业助手'
-  }, [industry.currentIndustryId, industry.industries])
-
-  // 推荐问题 - 根据行业生成，只要3个
-  const recommendQuestions = useMemo(() => {
-    const industryName = currentIndustryName
-    return [
-      `${industryName}市场规模`,
-      `${industryName}主要企业`,
-      `${industryName}政策解读`,
-    ]
-  }, [currentIndustryName])
+  // 静态推荐问题
+  const recommendQuestions = useMemo(() => [
+    'AI 大模型 2024 市场规模与主要厂商',
+    '新能源汽车产业链格局与上下游分析',
+    '半导体国产化进展与关键卡点',
+  ], [])
 
   // 附件状态管理
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([])
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null)
   const attachmentPollingRef = useRef<NodeJS.Timeout | null>(null)
-
-  // 热门资讯 - 从行业资讯和招投标获取，只取当月的
-  type HotItem = {
-    id: string
-    title: string
-    content?: string
-    type: 'news' | 'bidding'
-    date: string
-    source?: string
-    category?: string
-    province?: string
-    city?: string
-    department?: string
-  }
-  const [hotList, setHotList] = useState<HotItem[]>([])
-  const [newsLoading, setNewsLoading] = useState(true)
-
-  // 获取最近的行业资讯和招投标（最近30天或最新数据）
-  useEffect(() => {
-    async function fetchHotItems() {
-      try {
-        setNewsLoading(true)
-        const thirtyDaysAgo = dayjs().subtract(30, 'day')
-
-        // 并行获取资讯和招投标
-        const [newsRes, biddingRes] = await Promise.all([
-          api.news.getNewsList({
-            industry_id: industry.currentIndustryId,
-            limit: 20,
-            offset: 0,
-          }),
-          api.news.getBiddingList({
-            industry_id: industry.currentIndustryId,
-            limit: 20,
-            offset: 0,
-          }),
-        ])
-
-        const items: HotItem[] = []
-
-        // 获取资讯（API已按时间倒序，直接取最新的）
-        if (newsRes.success && newsRes.data) {
-          newsRes.data.forEach((n: NewsItem) => {
-            items.push({
-              id: n.id,
-              title: n.title,
-              content: n.content,
-              type: 'news',
-              date: n.publish_time || n.collected_at,
-              source: n.source,
-              category: n.category,
-              department: n.department,
-            })
-          })
-        }
-
-        // 获取招投标（API已按时间倒序，直接取最新的）
-        if (biddingRes.success && biddingRes.data) {
-          biddingRes.data.forEach((b: BiddingItem) => {
-            items.push({
-              id: b.id,
-              title: b.title,
-              content: b.content,
-              type: 'bidding',
-              date: b.publish_time || b.collected_at,
-              source: b.source,
-              category: b.notice_type,
-              province: b.province,
-              city: b.city,
-            })
-          })
-        }
-
-        // 按时间排序，取最新10条
-        items.sort((a, b) => dayjs(b.date).valueOf() - dayjs(a.date).valueOf())
-        setHotList(items.slice(0, 10))
-      } catch (error) {
-        console.error('获取热门资讯失败:', error)
-        setHotList([])
-      } finally {
-        setNewsLoading(false)
-      }
-    }
-
-    fetchHotItems()
-  }, [industry.currentIndustryId])
 
   // 轮询检查附件处理状态
   useEffect(() => {
@@ -275,11 +174,12 @@ export default function NewChat() {
   return (
     <div className={styles['newchat-page']}>
       <div className={styles['newchat-page__header']}>
-        {query.get('title') || currentIndustryName}
+        {query.get('title') || '研究助手'}
       </div>
 
       <ComSender
         className={styles['newchat-page__sender']}
+        defaultValue={query.get('prompt') || ''}
         attachments={attachments}
         onSend={send}
         onUploadAttachment={handleUploadAttachment}
@@ -299,65 +199,6 @@ export default function NewChat() {
               {question}
             </span>
           ))}
-        </div>
-      </div>
-
-      {/* 热门资讯 */}
-      <div className={styles['newchat-page__section']}>
-        <div className={styles['section-header']}>
-          <div className={styles['section-icon']}>
-            <img src={IconNews} />
-          </div>
-          <span className={styles['section-title']}>热门资讯</span>
-        </div>
-        <div className={styles['newchat-page__news-list']}>
-          {newsLoading ? (
-            <div style={{ padding: '20px', textAlign: 'center' }}>
-              <Spin size="small" />
-            </div>
-          ) : hotList.length > 0 ? (
-            hotList.map((item) => (
-              <div
-                className={styles['newchat-page__news-card']}
-                key={item.id}
-                onClick={() => send(`请帮我分析：${item.title}`)}
-              >
-                <div className={styles['news-card__title']}>{item.title}</div>
-                <div className={styles['news-card__info']}>
-                  <Tag color="blue">
-                    {item.type === 'news'
-                      ? (item.category || '资讯')
-                      : `招标 | ${item.category || '招标公告'}`}
-                  </Tag>
-                  {item.type === 'bidding' && (item.province || item.city) && (
-                    <span className={styles['info-location']}>
-                      <EnvironmentOutlined />
-                      {[item.province, item.city].filter(Boolean).join(' ')}
-                    </span>
-                  )}
-                  {item.type === 'news' && item.department && (
-                    <span className={styles['info-location']}>
-                      <EnvironmentOutlined />
-                      {item.department}
-                    </span>
-                  )}
-                </div>
-                <div className={styles['news-card__meta']}>
-                  <span className={styles['meta-item']}>
-                    <ClockCircleOutlined />
-                    发布于 {dayjs(item.date).format('YYYY/MM/DD')}
-                  </span>
-                  <span className={styles['meta-item']}>
-                    ID: {item.id.slice(0, 8)}...
-                  </span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div style={{ padding: '20px', textAlign: 'center', color: '#bfbfbf', fontSize: 13 }}>
-              暂无资讯，请点击"行业资讯"页面采集
-            </div>
-          )}
         </div>
       </div>
     </div>
