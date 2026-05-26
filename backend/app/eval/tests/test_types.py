@@ -63,3 +63,16 @@ def test_case_result_ok_default():
     assert cr.ok is True
     assert cr.error is None
     assert cr.results == []
+
+
+def test_seed_dataset_loads_and_has_30_entries():
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).parent.parent / "datasets" / "seed_queries.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 30
+    for line in lines:
+        obj = json.loads(line)
+        assert "id" in obj and "query" in obj
+        assert obj["difficulty"] in {"easy", "medium", "hard"}
