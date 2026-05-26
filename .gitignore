@@ -205,3 +205,6 @@ docs/eval-results/*
 !docs/eval-results/.gitkeep
 backend/app/eval/.eval.db
 backend/app/eval/.eval.db-*
+
+# Git worktrees (created by superpowers using-git-worktrees skill)
+.worktrees/
