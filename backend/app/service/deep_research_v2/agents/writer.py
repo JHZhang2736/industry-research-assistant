@@ -10,6 +10,7 @@ DeepResearch V2.0 - 首席笔杆 Agent (LeadWriter)
 4. 参考文献 - 规范的引用格式
 """
 
+import asyncio
 import uuid
 from typing import Dict, Any, List
 from datetime import datetime
@@ -254,10 +255,24 @@ class LeadWriter(BaseAgent):
             "content": "开始撰写深度研究报告..."
         })
 
-        # 逐章节撰写
-        for section in state["outline"]:
-            if section.get("status") not in ["final", "drafted"]:
-                await self._write_section(state, section)
+        # 并行撰写各章节
+        # _write_section 内部 mutate state['draft_sections'][section_id]，每章节独占自己的 key 不冲突。
+        # state['facts']/['data_points']/['insights'] 是 read-only，无竞态。
+        # 前后一致性靠 _synthesize_report 阶段兜底（参见 spec §1.3 / §5.2）。
+        unfinished = [
+            s for s in state["outline"]
+            if s.get("status") not in ["final", "drafted"]
+        ]
+        results = await asyncio.gather(
+            *[self._write_section(state, s) for s in unfinished],
+            return_exceptions=True,
+        )
+        errs = [r for r in results if isinstance(r, Exception)]
+        if errs:
+            self.logger.warning(
+                f"[LeadWriter] {len(errs)}/{len(unfinished)} sections failed "
+                f"to write: {[type(e).__name__ for e in errs[:3]]}"
+            )
 
         # 整合报告
         await self._synthesize_report(state)
