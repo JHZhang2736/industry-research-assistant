@@ -139,10 +139,12 @@ class EvalRunner:
                         error=str(r),
                     ))
 
+            any_score = any(r.score is not None for r in ev_results)
             cr = CaseResult(
                 case=case,
                 results=ev_results,
-                ok=True,
+                ok=any_score,
+                error=None if any_score else "all evaluators returned None/error",
                 state=state,
                 started_at=started,
                 finished_at=finished,

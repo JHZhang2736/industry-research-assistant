@@ -59,11 +59,10 @@ async def _load_final_state(session_id: str) -> dict | None:
     try:
         from service.checkpoint_service import CheckpointService
     except ImportError:
-        try:
-            from app.service.checkpoint_service import CheckpointService
-        except ImportError:
-            logger.error("Cannot import CheckpointService")
-            return None
+        # second path; if this also fails, let ImportError propagate
+        # so the user sees the env problem immediately instead of getting
+        # 30 opaque "checkpoint not found" errors per case
+        from app.service.checkpoint_service import CheckpointService
 
     svc = CheckpointService()
     cp = await svc.get_latest(session_id)
@@ -122,15 +121,45 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
 async def cmd_smoke(args: argparse.Namespace) -> int:
     """One-case real run for fast manual verification."""
+    missing = validate_required_keys()
+    if missing:
+        print(f"❌ Missing required env vars: {missing}", file=sys.stderr)
+        return 2
+
     cases = [EvalCase(
         id=args.case_id,
         query=args.query,
         category="manual",
         difficulty="easy",
     )]
-    args.suite = "smoke"
-    args.limit = None
-    return await cmd_run(args)
+    print(f"Suite: smoke, 1 case, concurrency=1")
+
+    judge = EnsembleJudge([
+        build_deepseek_judge(),
+        build_mimo_judge(),
+        build_qwen_judge(),
+    ])
+
+    runner = EvalRunner(
+        service=_build_service(),
+        load_final_state=_load_final_state,
+        judge=judge,
+        db_path=args.db,
+        out_dir=args.out,
+        concurrency=1,
+        git_commit=_git_commit(),
+        langsmith_project=args.langsmith_project,
+    )
+
+    summary = await runner.run("smoke", cases)
+    print("\n✅ Smoke complete")
+    print(f"  Run ID: {summary['run_id']}")
+    print(f"  OK / Total: {summary['ok']} / {summary['total']}")
+    print(f"  Failed: {summary['failed']}")
+    print(f"  Markdown: {summary['markdown_path']}")
+    if summary["langsmith_url"]:
+        print(f"  LangSmith: {summary['langsmith_url']}")
+    return 0 if summary["failed"] == 0 else 1
 
 
 def main() -> int:

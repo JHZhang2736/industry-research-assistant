@@ -63,7 +63,7 @@ async def test_runner_executes_all_cases(tmp_path, two_cases, sample_state, monk
 
     summary = await runner.run("smoke", two_cases)
     assert summary["total"] == 2
-    assert summary["ok"] >= 1
+    assert summary["ok"] == 2
 
     # Verify markdown produced
     md_files = list(Path(out_dir).glob("*.md"))
