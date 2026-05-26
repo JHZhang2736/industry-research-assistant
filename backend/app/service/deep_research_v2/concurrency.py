@@ -28,20 +28,25 @@ DEEPSEEK_SEM  = asyncio.Semaphore(DEEPSEEK_MAX_INFLIGHT)
 BOCHA_SEM     = asyncio.Semaphore(BOCHA_MAX_INFLIGHT)
 
 
-def get_llm_semaphore(base_url: str) -> asyncio.Semaphore:
+def get_llm_semaphore(base_url) -> asyncio.Semaphore:
     """Select the right semaphore for an LLM provider based on its base_url.
+
+    Accepts either a `str` or any object with a sane `__str__` (e.g. the
+    OpenAI SDK exposes `client.base_url` as an httpx `URL` instance, not
+    a string). Coerces to str defensively before substring matching.
 
     Default falls back to DASHSCOPE_SEM (most conservative) when base_url
     doesn't match a known provider, with a warning so unknown providers
     aren't silently throttled like dashscope.
     """
-    if "dashscope" in base_url:
+    url_str = str(base_url) if base_url is not None else ""
+    if "dashscope" in url_str:
         return DASHSCOPE_SEM
-    if "deepseek" in base_url:
+    if "deepseek" in url_str:
         return DEEPSEEK_SEM
     _logger.warning(
         "Unknown LLM base_url %r; falling back to DASHSCOPE_SEM (default 10 in-flight)",
-        base_url,
+        url_str,
     )
     return DASHSCOPE_SEM
 
