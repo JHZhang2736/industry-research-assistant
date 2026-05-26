@@ -180,6 +180,14 @@ backend/tmp/
 backend/data/
 backend/.cache/
 
+# Stray chart images from CodeWizard sandbox (LLM-generated savefig escapes).
+# Sandbox now monkey-patches plt.savefig to no-op, but keep these as belt-and-suspenders.
+backend/*.png
+backend/*.jpg
+backend/*.svg
+# Wrong-location eval reports (legacy from when CLI --out was cwd-relative)
+backend/docs/
+
 # Local databases
 *.sqlite
 *.sqlite3

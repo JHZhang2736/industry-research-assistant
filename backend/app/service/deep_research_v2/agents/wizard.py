@@ -112,13 +112,13 @@ df = df.dropna()
 - **去除边框**: `sns.despine()`
 - **折线图**: `linewidth=2.5, marker='o', markersize=8`，可加面积填充 `plt.fill_between()`
 - **柱状图**: 添加数值标签
-- **保存**: `plt.savefig('chart.png', dpi=200, bbox_inches='tight', facecolor='white')`
+- **不要调用 `plt.savefig(...)`**：sandbox 会自动捕获当前 figure 写入 BytesIO，落盘到磁盘会污染项目根目录
 
 ## 输出格式（严格JSON，code字段用\\n表示换行）
 ```json
 {{
     "analysis_plan": "简要分析计划",
-    "code": "sns.set_theme(style='whitegrid')\\ndata = {{'Year': [2020, 2022, 2024], 'Value': [100, 150, 200]}}\\ndf = pd.DataFrame(data)\\ndf['Value'] = pd.to_numeric(df['Value'], errors='coerce')\\nplt.figure(figsize=(12, 7), dpi=200)\\nplt.plot(df['Year'], df['Value'], linewidth=2.5, marker='o', markersize=8, color='#6366f1')\\nplt.fill_between(df['Year'], df['Value'], alpha=0.15, color='#6366f1')\\nplt.title('市场规模趋势', fontsize=18, fontweight='bold')\\nplt.xlabel('年份', fontsize=14)\\nplt.ylabel('规模（亿元）', fontsize=14)\\nplt.xticks(fontsize=12)\\nplt.yticks(fontsize=12)\\nsns.despine()\\nplt.savefig('chart.png', dpi=200, bbox_inches='tight', facecolor='white')",
+    "code": "sns.set_theme(style='whitegrid')\\ndata = {{'Year': [2020, 2022, 2024], 'Value': [100, 150, 200]}}\\ndf = pd.DataFrame(data)\\ndf['Value'] = pd.to_numeric(df['Value'], errors='coerce')\\nplt.figure(figsize=(12, 7), dpi=200)\\nplt.plot(df['Year'], df['Value'], linewidth=2.5, marker='o', markersize=8, color='#6366f1')\\nplt.fill_between(df['Year'], df['Value'], alpha=0.15, color='#6366f1')\\nplt.title('市场规模趋势', fontsize=18, fontweight='bold')\\nplt.xlabel('年份', fontsize=14)\\nplt.ylabel('规模（亿元）', fontsize=14)\\nplt.xticks(fontsize=12)\\nplt.yticks(fontsize=12)\\nsns.despine()",
     "expected_outputs": ["图表描述"]
 }}
 ```
@@ -151,7 +151,7 @@ df = df.dropna()
 7. **配色方案**: 使用渐变色或专业配色，如 `color='#6366f1'` 或 `palette='Blues_d'`
 8. **网格线**: 使用浅色虚线网格 `plt.grid(True, linestyle='--', alpha=0.3)`
 9. **边框优化**: `sns.despine()` 去除上右边框
-10. **保存**: `plt.savefig('chart.png', dpi=200, bbox_inches='tight', facecolor='white', edgecolor='none')`
+10. **不要 plt.savefig(...)**：sandbox 自动捕获 figure 到 BytesIO，写盘会污染项目根目录
 
 ### 折线图额外要求
 - 线宽 2.5: `linewidth=2.5`
@@ -165,7 +165,7 @@ df = df.dropna()
 ## 输出格式（严格JSON）
 ```json
 {{
-    "code": "sns.set_theme(style='whitegrid')\\ndata = {{'Year': [2020, 2022], 'Value': [100, 200]}}\\ndf = pd.DataFrame(data)\\nplt.figure(figsize=(12,7), dpi=200)\\nplt.bar(df['Year'], df['Value'], color='#6366f1')\\nplt.title('标题', fontsize=18, fontweight='bold')\\nplt.xlabel('年份', fontsize=14)\\nplt.ylabel('数值', fontsize=14)\\nplt.xticks(fontsize=12)\\nplt.yticks(fontsize=12)\\nsns.despine()\\nplt.savefig('chart.png', dpi=200, bbox_inches='tight', facecolor='white')",
+    "code": "sns.set_theme(style='whitegrid')\\ndata = {{'Year': [2020, 2022], 'Value': [100, 200]}}\\ndf = pd.DataFrame(data)\\nplt.figure(figsize=(12,7), dpi=200)\\nplt.bar(df['Year'], df['Value'], color='#6366f1')\\nplt.title('标题', fontsize=18, fontweight='bold')\\nplt.xlabel('年份', fontsize=14)\\nplt.ylabel('数值', fontsize=14)\\nplt.xticks(fontsize=12)\\nplt.yticks(fontsize=12)\\nsns.despine()",
     "chart_description": "图表说明"
 }}
 ```
@@ -234,7 +234,7 @@ df = df.dropna()
 3. 停用词过滤（去掉"的"、"是"、"在"等常见词）
 4. 专业配色方案（推荐使用渐变色）
 5. 图表尺寸 (12, 8)
-6. 保存图片: plt.savefig('chart.png', dpi=150, bbox_inches='tight', facecolor='white')
+6. 不要 plt.savefig(...)：sandbox 自动捕获 figure 到 BytesIO
 
 输出JSON：
 ```json
@@ -288,7 +288,7 @@ df = df.dropna()
 3. 不同类型节点用不同颜色
 4. 边的粗细根据关系强度调整
 5. 添加节点标签
-6. 保存图片: plt.savefig('chart.png', dpi=150, bbox_inches='tight', facecolor='white')
+6. 不要 plt.savefig(...)：sandbox 自动捕获 figure 到 BytesIO
 
 输出JSON：
 ```json
@@ -1245,8 +1245,16 @@ df = df.dropna()
             self.logger.info(f"[CodeWizard] 开始 exec()...")
             self._save_debug_log("sandbox_2_before_exec", f"即将执行代码，长度: {len(code)} 字符")
 
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                exec(code, exec_globals)
+            # Monkey-patch plt.savefig 为 no-op，防止 LLM 代码把图表落盘到 CWD（项目根）。
+            # service 自己在 exec 后用 fig.savefig(buf,...) 实例方法捕获到 BytesIO，
+            # 那是 Figure.savefig 不是 module-level plt.savefig，不受影响。
+            _original_savefig = plt.savefig
+            plt.savefig = lambda *a, **kw: None
+            try:
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    exec(code, exec_globals)
+            finally:
+                plt.savefig = _original_savefig
 
             self.logger.info(f"[CodeWizard] exec() 完成")
 

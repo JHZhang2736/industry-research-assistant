@@ -19,6 +19,12 @@ _APP_DIR = Path(__file__).resolve().parent.parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+# Project root = backend/app/eval/cli.py → .parent×4 → repo root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Default eval report output: anchored to repo root, NOT cwd. Otherwise running
+# `cd backend && python -m app.eval.cli` writes to backend/docs/eval-results/.
+_DEFAULT_OUT_DIR = str(_REPO_ROOT / "docs" / "eval-results")
+
 from app.eval.judges.deepseek import build_deepseek_judge
 from app.eval.judges.ensemble import EnsembleJudge
 from app.eval.judges.mimo import build_mimo_judge
@@ -184,7 +190,7 @@ def main() -> int:
     p_run.add_argument("--suite", default="full", help="full | mini | <jsonl path>")
     p_run.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     p_run.add_argument("--db", default=SQLITE_PATH)
-    p_run.add_argument("--out", default="docs/eval-results")
+    p_run.add_argument("--out", default=_DEFAULT_OUT_DIR)
     p_run.add_argument("--langsmith-project", default=LANGSMITH_PROJECT)
     p_run.add_argument("--limit", type=int, default=None, help="cap number of cases")
 
