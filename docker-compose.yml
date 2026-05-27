@@ -99,7 +99,7 @@ services:
       - industry-network
 
   backend:
-    image: ccr.ccs.tencentyun.com/deepresearch/industry-research-assistant-backend:latest
+    image: jhzhang2736/industry-research-assistant-backend:latest
     build:
       context: ./backend
     container_name: industry-backend
@@ -122,7 +122,7 @@ services:
       - industry-network
 
   frontend:
-    image: ccr.ccs.tencentyun.com/deepresearch/industry-research-assistant-frontend:latest
+    image: jhzhang2736/industry-research-assistant-frontend:latest
     build:
       context: ./frontend
     container_name: industry-frontend
