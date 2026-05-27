@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.tools import tool
 
 from .state import ResearchState
-from .agents import DeepScout
+from .agents import DeepScout, DataAnalyst
 
 try:
     from config.llm_config import get_config
@@ -20,6 +20,7 @@ except ImportError:
 logger = logging.getLogger("deep_research_v3.tools")
 
 _scout_instance: Optional[DeepScout] = None
+_analyst_instance: Optional[DataAnalyst] = None
 
 
 def get_scout_instance() -> DeepScout:
@@ -38,8 +39,9 @@ def get_scout_instance() -> DeepScout:
 
 def reset_instances():
     """测试用：重置所有单例"""
-    global _scout_instance
+    global _scout_instance, _analyst_instance
     _scout_instance = None
+    _analyst_instance = None
 
 
 @tool
@@ -72,3 +74,43 @@ async def search_section(
     except Exception as e:
         logger.exception(f"search_section[{section_id}] failed: {e}")
         return {"facts": [], "sources": [], "section_id": section_id, "error": str(e)}
+
+
+def get_analyst_instance() -> DataAnalyst:
+    """获取 DataAnalyst 单例"""
+    global _analyst_instance
+    if _analyst_instance is None:
+        config = get_config()
+        _analyst_instance = DataAnalyst(
+            llm_api_key=config.api_key,
+            llm_base_url=config.base_url,
+            model=config.agents.data_analyst.model,
+        )
+    return _analyst_instance
+
+
+@tool
+async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
+    """从已收集的 facts 中提取 data points + 构建知识图谱 + 生成 insights。
+
+    Args:
+        state: 共享 ResearchState，读取 state["facts"]
+
+    Returns:
+        {
+            "data_points": [...],
+            "knowledge_graph": {"nodes": [...], "edges": [...]},
+            "insights": [str, ...],
+        }
+    """
+    analyst = get_analyst_instance()
+    try:
+        return await analyst.extract_data_points(state)
+    except Exception as e:
+        logger.exception(f"analyze_facts failed: {e}")
+        return {
+            "data_points": [],
+            "knowledge_graph": {"nodes": [], "edges": []},
+            "insights": [],
+            "error": str(e),
+        }

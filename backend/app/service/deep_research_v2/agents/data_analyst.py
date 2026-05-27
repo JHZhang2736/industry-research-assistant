@@ -486,3 +486,34 @@ class DataAnalyst(BaseAgent):
         )
 
         return self.parse_json_response(response)
+
+    async def extract_data_points(self, state: ResearchState) -> Dict[str, Any]:
+        """v3 入口：从 state["facts"] 提取 data_points + 知识图谱 + insights
+
+        复用现有 _extract_data 和 _build_knowledge_graph 内部逻辑（mutates state）。
+        用 snapshot/diff 方案捕获 data_points/insights 新增项；knowledge_graph
+        直接取 _build_knowledge_graph 的返回值（process() 中是覆盖式 assign）。
+
+        state 会被现有方法 mutate（保留兼容），返回 dict 描述本次新增/最终值。
+        """
+        facts = state.get("facts", [])
+        if not facts:
+            return {
+                "data_points": [],
+                "knowledge_graph": {"nodes": [], "edges": []},
+                "insights": [],
+            }
+
+        dp_before = len(state.get("data_points", []))
+        insights_before = len(state.get("insights", []))
+
+        # 复用现有 _extract_data（mutates state["data_points"] + state["insights"]）
+        await self._extract_data(state)
+        # 复用现有 _build_knowledge_graph（返回 dict）
+        kg = await self._build_knowledge_graph(state)
+
+        return {
+            "data_points": state.get("data_points", [])[dp_before:],
+            "knowledge_graph": kg or {"nodes": [], "edges": []},
+            "insights": state.get("insights", [])[insights_before:],
+        }
