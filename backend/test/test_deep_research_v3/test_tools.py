@@ -123,3 +123,31 @@ async def test_generate_charts_returns_charts(monkeypatch):
     assert "charts" in result
     assert "code_executions" in result
     assert len(result["charts"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_write_section_returns_draft(monkeypatch):
+    """write_section 写一个章节，返回 {section_id, content}"""
+    from app.service.deep_research_v2.tools import write_section
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["facts"] = [{"id": "f1", "content": "fact"}]
+    state["outline"] = [{"id": "sec_1", "title": "第一章"}]
+
+    mock_writer = AsyncMock()
+    mock_writer.write_one_section = AsyncMock(return_value={
+        "section_id": "sec_1",
+        "content": "# 第一章\n章节内容...",
+    })
+    monkeypatch.setattr(
+        "app.service.deep_research_v2.tools.get_writer_instance",
+        lambda: mock_writer
+    )
+
+    result = await write_section.ainvoke({
+        "section_id": "sec_1",
+        "state": state,
+    })
+
+    assert result["section_id"] == "sec_1"
+    assert "content" in result

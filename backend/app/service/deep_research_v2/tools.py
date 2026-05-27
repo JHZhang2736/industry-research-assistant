@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.tools import tool
 
 from .state import ResearchState
-from .agents import DeepScout, DataAnalyst, CodeWizard
+from .agents import DeepScout, DataAnalyst, CodeWizard, LeadWriter
 
 try:
     from config.llm_config import get_config
@@ -22,6 +22,7 @@ logger = logging.getLogger("deep_research_v3.tools")
 _scout_instance: Optional[DeepScout] = None
 _analyst_instance: Optional[DataAnalyst] = None
 _wizard_instance: Optional[CodeWizard] = None
+_writer_instance: Optional[LeadWriter] = None
 
 
 def get_scout_instance() -> DeepScout:
@@ -40,10 +41,11 @@ def get_scout_instance() -> DeepScout:
 
 def reset_instances():
     """测试用：重置所有单例"""
-    global _scout_instance, _analyst_instance, _wizard_instance
+    global _scout_instance, _analyst_instance, _wizard_instance, _writer_instance
     _scout_instance = None
     _analyst_instance = None
     _wizard_instance = None
+    _writer_instance = None
 
 
 @tool
@@ -147,3 +149,38 @@ async def generate_charts(state: ResearchState) -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"generate_charts failed: {e}")
         return {"charts": [], "code_executions": [], "error": str(e)}
+
+
+def get_writer_instance() -> LeadWriter:
+    """获取 LeadWriter 单例"""
+    global _writer_instance
+    if _writer_instance is None:
+        config = get_config()
+        _writer_instance = LeadWriter(
+            llm_api_key=config.api_key,
+            llm_base_url=config.base_url,
+            model=config.agents.writer.model,
+        )
+    return _writer_instance
+
+
+@tool
+async def write_section(
+    section_id: str,
+    state: ResearchState,
+) -> Dict[str, Any]:
+    """撰写一个章节的 Markdown 内容（复用 facts + data_points + charts）。
+
+    Args:
+        section_id: 要写的章节 ID（来自 outline）
+        state: 共享 ResearchState
+
+    Returns:
+        {"section_id": section_id, "content": "# Markdown..."}
+    """
+    writer = get_writer_instance()
+    try:
+        return await writer.write_one_section(section_id=section_id, state=state)
+    except Exception as e:
+        logger.exception(f"write_section[{section_id}] failed: {e}")
+        return {"section_id": section_id, "content": "", "error": str(e)}

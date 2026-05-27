@@ -527,3 +527,22 @@ class LeadWriter(BaseAgent):
         state["phase"] = ResearchPhase.REVIEWING.value
 
         return state
+
+    async def write_one_section(
+        self,
+        section_id: str,
+        state: ResearchState,
+    ) -> Dict[str, Any]:
+        """v3 入口：撰写指定章节
+
+        从 state["outline"] 找 section dict，调现有 _write_section（mutates state["draft_sections"]），
+        最后从 state["draft_sections"][section_id] 取生成的内容返回。
+        """
+        outline = state.get("outline", [])
+        section = next((s for s in outline if s.get("id") == section_id), None)
+        if section is None:
+            return {"section_id": section_id, "content": "", "error": "section not in outline"}
+
+        await self._write_section(state, section)
+        content = state.get("draft_sections", {}).get(section_id, "")
+        return {"section_id": section_id, "content": content}
