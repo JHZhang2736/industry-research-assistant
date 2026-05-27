@@ -59,36 +59,31 @@ class CriticMaster(BaseAgent):
 逐条审核上述内容，找出所有问题。你必须扮演一个"找茬专家"的角色。
 
 ## 输出格式
+
+请严格按以下 JSON schema 输出（扁平结构，配合 Replanner 使用）：
+
 ```json
 {{
-    "overall_assessment": {{
-        "quality_score": 1-10,
-        "verdict": "pass/needs_revision/major_issues",
-        "summary": "整体评估摘要"
-    }},
-    "issues": [
+    "quality_score": 1-10 的浮点数,
+    "verdict": "pass" | "needs_revision" | "needs_re_research",
+    "summary": "整体评估摘要",
+    "critic_feedback": [
         {{
-            "id": "issue_1",
+            "id": "issue_xxx",
             "target_section": "章节ID或'全局'",
             "issue_type": "missing_source/logic_error/bias/hallucination/outdated/incomplete",
             "severity": "critical/major/minor",
-            "location": "具体位置描述",
             "description": "问题详细描述",
-            "evidence": "为什么这是问题的证据",
-            "suggestion": "具体的修改建议",
-            "requires_new_search": true或false,
-            "search_query": "如果需要补充搜索，建议的关键词"
+            "suggestion": "具体的修改建议"
         }}
     ],
-    "fact_check_results": [
-        {{
-            "fact_id": "事实ID",
-            "status": "verified/unverified/suspicious/false",
-            "reason": "判断理由"
-        }}
-    ],
+    "unresolved_issues": 严重/重大问题计数（整数）,
     "missing_aspects": ["报告中遗漏的重要方面"],
-    "strength_points": ["报告中做得好的地方"]
+    "suggested_actions": [
+        "retry_search:sec_X"  // 缺信息，需要补充搜索（X 是 outline 中的 section_id）
+        | "rewrite:sec_X"     // 文字/逻辑问题，需要改写
+        | "add_data:sec_X"    // 缺数据点
+    ]
 }}
 ```
 
@@ -147,90 +142,59 @@ class CriticMaster(BaseAgent):
             model=model
         )
 
-    async def process(self, state: ResearchState) -> ResearchState:
-        """处理入口"""
-        self.logger.info(f"[CriticMaster] ========== process 开始 ==========")
-        self.logger.info(f"[CriticMaster] phase: {state['phase']}, final_report 长度: {len(state.get('final_report', ''))}")
+    async def process(self, state: ResearchState) -> Dict[str, Any]:
+        """v3 节点形态：返回扁平 dict，不直接修改 state
 
-        if state["phase"] != ResearchPhase.REVIEWING.value:
-            self.logger.info(f"[CriticMaster] phase 不是 REVIEWING，跳过")
-            return state
-
+        Returns:
+            {
+                "quality_score": float,
+                "verdict": "pass" | "needs_revision" | "needs_re_research",
+                "critic_feedback": list[dict],
+                "unresolved_issues": int,
+                "suggested_actions": list[str],   # 给 Replanner 消费
+                "missing_aspects": list[str],
+                "summary": str,
+            }
+        """
         self.add_message(state, "thought", {
             "agent": self.name,
-            "content": "开始严格审核研究报告，准备找出所有问题..."
+            "content": "开始严格审核研究报告，准备找出所有问题...",
         })
 
-        # 执行审核
-        self.logger.info(f"[CriticMaster] 开始调用 _review_content...")
-        review_result = await self._review_content(state)
-        self.logger.info(f"[CriticMaster] 审核完成，结果: {bool(review_result)}")
+        parsed = await self._review_content(state) or {}
 
-        if review_result:
-            # 记录反馈
-            for issue in review_result.get("issues", []):
-                issue["id"] = f"issue_{uuid.uuid4().hex[:8]}"
-                issue["resolved"] = False
-                state["critic_feedback"].append(issue)
+        result = {
+            "quality_score": parsed.get("quality_score", 0.0),
+            "verdict": parsed.get("verdict", "needs_revision"),
+            "critic_feedback": parsed.get("critic_feedback", []),
+            "unresolved_issues": parsed.get(
+                "unresolved_issues",
+                len([
+                    i for i in parsed.get("critic_feedback", [])
+                    if i.get("severity") in ("critical", "major")
+                ]),
+            ),
+            "suggested_actions": parsed.get("suggested_actions", []),
+            "missing_aspects": parsed.get("missing_aspects", []),
+            "summary": parsed.get("summary", ""),
+        }
 
-            # 更新质量分数
-            state["quality_score"] = review_result.get("overall_assessment", {}).get("quality_score", 0.0)
-            state["unresolved_issues"] = len([i for i in review_result.get("issues", []) if i.get("severity") in ["critical", "major"]])
+        # 给每条 feedback 补 id（若 LLM 没生成）
+        for fb in result["critic_feedback"]:
+            if "id" not in fb:
+                fb["id"] = f"issue_{uuid.uuid4().hex[:8]}"
+            fb.setdefault("resolved", False)
 
-            # 发送审核结果
-            self.add_message(state, "review", {
-                "agent": self.name,
-                "verdict": review_result.get("overall_assessment", {}).get("verdict"),
-                "quality_score": state["quality_score"],
-                "issues_count": len(review_result.get("issues", [])),
-                "critical_issues": len([i for i in review_result.get("issues", []) if i.get("severity") == "critical"]),
-                "major_issues": len([i for i in review_result.get("issues", []) if i.get("severity") == "major"]),
-                "summary": review_result.get("overall_assessment", {}).get("summary", ""),
-                "missing_aspects": review_result.get("missing_aspects", [])
-            })
+        self.add_message(state, "review", {
+            "agent": self.name,
+            "verdict": result["verdict"],
+            "quality_score": result["quality_score"],
+            "issues_count": len(result["critic_feedback"]),
+            "suggested_actions": result["suggested_actions"],
+            "summary": result["summary"],
+        })
 
-            # 如果有严重问题，发送具体反馈
-            critical_issues = [i for i in review_result.get("issues", []) if i.get("severity") == "critical"]
-            for issue in critical_issues[:3]:  # 最多展示3个严重问题
-                self.add_message(state, "critic_feedback", {
-                    "agent": self.name,
-                    "issue_type": issue.get("issue_type"),
-                    "severity": issue.get("severity"),
-                    "description": issue.get("description"),
-                    "suggestion": issue.get("suggestion")
-                })
-
-            # 决定下一步 - 智能路由
-            verdict = review_result.get("overall_assessment", {}).get("verdict", "needs_revision")
-
-            if verdict == "pass":
-                state["phase"] = ResearchPhase.COMPLETED.value
-            elif state["iteration"] >= state["max_iterations"]:
-                # 达到最大迭代次数，强制完成
-                state["phase"] = ResearchPhase.COMPLETED.value
-                self.add_message(state, "warning", {
-                    "agent": self.name,
-                    "content": "已达最大迭代次数，部分问题可能未解决"
-                })
-            else:
-                # 智能路由：判断是需要补充搜索还是仅修改文字
-                needs_new_search = self._analyze_issues_for_routing(review_result)
-
-                if needs_new_search["should_research"]:
-                    # 需要补充搜索 -> 回到研究阶段
-                    state["phase"] = ResearchPhase.RE_RESEARCHING.value
-                    state["pending_search_queries"] = needs_new_search["search_queries"]
-                    self.add_message(state, "thought", {
-                        "agent": self.name,
-                        "content": f"发现信息缺失问题，需要补充搜索: {', '.join(needs_new_search['search_queries'][:3])}"
-                    })
-                else:
-                    # 仅需要文字修改 -> 修订阶段
-                    state["phase"] = ResearchPhase.REVISING.value
-
-                state["iteration"] += 1
-
-        return state
+        return result
 
     def _analyze_issues_for_routing(self, review_result: Dict[str, Any]) -> Dict[str, Any]:
         """
