@@ -14,6 +14,7 @@ from .critic import CriticMaster
 from .writer import LeadWriter
 from .data_analyst import DataAnalyst
 from .planner import Planner
+from .replanner import Replanner
 
 __all__ = [
     'BaseAgent',
@@ -24,5 +25,6 @@ __all__ = [
     'CriticMaster',
     'LeadWriter',
     'DataAnalyst',
-    'Planner'
+    'Planner',
+    'Replanner'
 ]
