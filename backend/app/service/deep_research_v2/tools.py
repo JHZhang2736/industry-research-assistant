@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.tools import tool
 
 from .state import ResearchState
-from .agents import DeepScout, DataAnalyst
+from .agents import DeepScout, DataAnalyst, CodeWizard
 
 try:
     from config.llm_config import get_config
@@ -21,6 +21,7 @@ logger = logging.getLogger("deep_research_v3.tools")
 
 _scout_instance: Optional[DeepScout] = None
 _analyst_instance: Optional[DataAnalyst] = None
+_wizard_instance: Optional[CodeWizard] = None
 
 
 def get_scout_instance() -> DeepScout:
@@ -39,9 +40,10 @@ def get_scout_instance() -> DeepScout:
 
 def reset_instances():
     """测试用：重置所有单例"""
-    global _scout_instance, _analyst_instance
+    global _scout_instance, _analyst_instance, _wizard_instance
     _scout_instance = None
     _analyst_instance = None
+    _wizard_instance = None
 
 
 @tool
@@ -114,3 +116,34 @@ async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
             "insights": [],
             "error": str(e),
         }
+
+
+def get_wizard_instance() -> CodeWizard:
+    """获取 CodeWizard 单例"""
+    global _wizard_instance
+    if _wizard_instance is None:
+        config = get_config()
+        _wizard_instance = CodeWizard(
+            llm_api_key=config.api_key,
+            llm_base_url=config.base_url,
+            model=config.agents.wizard.model,
+        )
+    return _wizard_instance
+
+
+@tool
+async def generate_charts(state: ResearchState) -> Dict[str, Any]:
+    """根据 data_points 生成可视化图表（matplotlib + ECharts option）。
+
+    Args:
+        state: 共享 ResearchState，读取 state["data_points"]
+
+    Returns:
+        {"charts": [...], "code_executions": [...]}
+    """
+    wizard = get_wizard_instance()
+    try:
+        return await wizard.generate_charts_for_state(state)
+    except Exception as e:
+        logger.exception(f"generate_charts failed: {e}")
+        return {"charts": [], "code_executions": [], "error": str(e)}

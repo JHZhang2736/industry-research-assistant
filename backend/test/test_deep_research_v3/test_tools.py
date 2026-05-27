@@ -99,3 +99,27 @@ async def test_analyze_facts_returns_data_points(monkeypatch):
     assert "knowledge_graph" in result
     assert "insights" in result
     assert result["data_points"][0]["name"] == "5G 用户数"
+
+
+@pytest.mark.asyncio
+async def test_generate_charts_returns_charts(monkeypatch):
+    """generate_charts 返回 {'charts': [...], 'code_executions': [...]}"""
+    from app.service.deep_research_v2.tools import generate_charts
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["data_points"] = [{"name": "x", "value": 1}]
+
+    mock_wizard = AsyncMock()
+    mock_wizard.generate_charts_for_state = AsyncMock(return_value={
+        "charts": [{"id": "c1", "chart_type": "bar"}],
+        "code_executions": [{"code": "...", "ok": True}],
+    })
+    monkeypatch.setattr(
+        "app.service.deep_research_v2.tools.get_wizard_instance",
+        lambda: mock_wizard
+    )
+
+    result = await generate_charts.ainvoke({"state": state})
+    assert "charts" in result
+    assert "code_executions" in result
+    assert len(result["charts"]) == 1

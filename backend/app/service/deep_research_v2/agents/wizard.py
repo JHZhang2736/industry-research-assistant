@@ -1319,3 +1319,25 @@ df = df.dropna()
                 "error": error_msg,
                 "charts": []
             }
+
+    async def generate_charts_for_state(self, state: ResearchState) -> Dict[str, Any]:
+        """v3 入口：根据 state["data_points"] 生成图表
+
+        复用现有 _analyze_data 和 _generate_charts（mutates state["charts"] / state["code_executions"]）。
+        用 snapshot/diff 方案捕获本次新增项返回。
+        """
+        data_points = state.get("data_points", [])
+        if not data_points:
+            return {"charts": [], "code_executions": []}
+
+        charts_before = len(state.get("charts", []))
+        execs_before = len(state.get("code_executions", []))
+
+        # 复用现有方法（mutate state）
+        await self._analyze_data(state)
+        await self._generate_charts(state)
+
+        return {
+            "charts": state.get("charts", [])[charts_before:],
+            "code_executions": state.get("code_executions", [])[execs_before:],
+        }
