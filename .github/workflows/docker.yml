@@ -96,3 +96,35 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.IMAGE_REPO }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_REPO }}:buildcache,mode=max
+
+  deploy:
+    name: Deploy to ECS
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          known_hosts: 'placeholder-will-replace'
+
+      - name: Add ECS to known_hosts
+        run: |
+          ssh-keyscan -H -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        run: |
+          ssh -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+            set -e
+            cd /opt/industry-research-assistant
+            echo "=== Sync repo ==="
+            git pull origin main
+            echo "=== Pull new images ==="
+            docker compose pull backend frontend
+            echo "=== Restart stack ==="
+            docker compose up -d --remove-orphans
+            echo "=== Status ==="
+            docker compose ps
+            echo "=== Prune old images (keep 7d) ==="
+            docker image prune -a -f --filter "until=168h" || true
+          EOF
