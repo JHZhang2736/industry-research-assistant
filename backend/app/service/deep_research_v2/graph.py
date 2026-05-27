@@ -16,11 +16,11 @@ from datetime import datetime
 
 # 导入取消检查函数
 try:
-    from router.research_router import is_research_cancelled, clear_cancel_flag
-except ImportError:
+    from app.router.research_router import is_research_cancelled, clear_cancel_flag
+except (ImportError, SyntaxError):
     try:
-        from app.router.research_router import is_research_cancelled, clear_cancel_flag
-    except ImportError:
+        from router.research_router import is_research_cancelled, clear_cancel_flag
+    except (ImportError, SyntaxError):
         # 兼容直接运行脚本的情况
         def is_research_cancelled(session_id: str) -> bool:
             return False

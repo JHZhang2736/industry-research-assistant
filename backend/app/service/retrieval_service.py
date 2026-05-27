@@ -9,8 +9,8 @@
 """
 
 from typing import List, Dict, Any, Optional
-from service.milvus_service import get_milvus_service
-from service.embedding_service import generate_embedding
+from app.service.milvus_service import get_milvus_service
+from app.service.embedding_service import generate_embedding
 
 
 def retrieve_content(
