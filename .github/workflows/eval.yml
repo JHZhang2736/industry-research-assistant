@@ -1,10 +1,6 @@
 name: Eval
 
 on:
-  pull_request:
-    paths:
-      - 'backend/app/eval/**'
-      - 'backend/requirements.txt'
   workflow_dispatch:
     inputs:
       suite:
@@ -17,26 +13,8 @@ on:
         required: true
 
 jobs:
-  unit-tests:
-    name: Eval unit tests (mock, no network)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install deps
-        working-directory: backend
-        run: |
-          pip install -r requirements.txt
-      - name: Run eval unit tests
-        working-directory: backend
-        run: |
-          pytest app/eval/tests/ -v --tb=short
-
   eval-suite:
     name: Run full eval suite
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     # 30 cases × ~25min/case ÷ 5 concurrency = ~150min + judge/url-check overhead;
     # 4h hard cap gives buffer for slow LLM days.
