@@ -1,0 +1,146 @@
+# 完整应用栈：postgres + redis + milvus + backend + frontend
+# 本地开发：docker compose up -d
+# 部署：同一 compose 在服务器上拉 GHCR 镜像跑
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: industry-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+      POSTGRES_DB: ${POSTGRES_DB:-industry_assistant}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - industry-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: industry-redis
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    networks:
+      - industry-network
+
+  milvus-etcd:
+    container_name: industry-milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus-etcd-data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - industry-network
+
+  milvus-minio:
+    container_name: industry-milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    ports:
+      - "9001:9001"
+      - "9000:9000"
+    volumes:
+      - milvus-minio-data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - industry-network
+
+  milvus-standalone:
+    container_name: industry-milvus-standalone
+    image: milvusdb/milvus:v2.3.3
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: milvus-etcd:2379
+      MINIO_ADDRESS: milvus-minio:9000
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+      - "9091:9091"
+    depends_on:
+      - milvus-etcd
+      - milvus-minio
+    networks:
+      - industry-network
+
+  backend:
+    image: ghcr.io/jhzhang2736/industry-research-assistant-backend:latest
+    build:
+      context: ./backend
+    container_name: industry-backend
+    env_file: backend/.env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_HOST: redis
+      MILVUS_HOST: milvus-standalone
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      milvus-standalone:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - industry-network
+
+  frontend:
+    image: ghcr.io/jhzhang2736/industry-research-assistant-frontend:latest
+    build:
+      context: ./frontend
+    container_name: industry-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    restart: unless-stopped
+    networks:
+      - industry-network
+
+networks:
+  industry-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  milvus-etcd-data:
+  milvus-minio-data:
+  milvus-data:
