@@ -22,6 +22,7 @@ export default function ComSender(
   props: PropsWithChildren<{
     className?: string
     loading?: boolean
+    defaultValue?: string
     attachments?: AttachmentInfo[]
     onSend?: (value: string, attachmentIds?: string[]) => void | Promise<void>
     onStop?: () => void | Promise<void>
@@ -36,12 +37,13 @@ export default function ComSender(
     onStop,
     onContract,
     loading,
+    defaultValue,
     attachments = [],
     onUploadAttachment,
     onRemoveAttachment,
     ...rest
   } = props
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(defaultValue ?? '')
   const device = useSnapshot(deviceState)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
