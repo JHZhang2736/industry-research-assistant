@@ -13,6 +13,11 @@ RUN npm ci --ignore-scripts --legacy-peer-deps
 # Copy rest of frontend source
 COPY . .
 
+# Production env: use /api/ so nginx proxies to backend
+ENV VITE_API_BASE=/api/
+ENV VITE_API_PROXY=/api/
+ENV VITE_TITLE=行业咨询助手
+
 # Build production bundle
 RUN npm run build
 
