@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+
+# Local dev / secrets
+.env
+.env.*
+!.env.example
+
+# Eval framework local files
+app/eval/.eval.db
+app/eval/.eval.db-*
+
+# Backup / git artifacts
+backup/
+.git/
+.gitignore
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/tmp/
+
+# Docs (不需要打进 image)
+docs/
+
+# Test artifacts
+.coverage
+coverage.xml
+htmlcov/
