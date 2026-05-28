@@ -13,7 +13,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 try:
     from langsmith.wrappers import wrap_openai
@@ -50,7 +50,11 @@ class BaseAgent(ABC):
         # wrap_openai：LANGSMITH_TRACING=true 时自动把每次 chat.completions.create
         # 注册成 LangSmith span（含 prompt/completion/token usage）；
         # 未开启 tracing 时为零开销 passthrough。
-        self.client = wrap_openai(OpenAI(api_key=llm_api_key, base_url=llm_base_url))
+        # 用 AsyncOpenAI 而不是 OpenAI + asyncio.to_thread —— 后者会把调用搬到
+        # 线程池里，线程的 contextvars 虽然被复制，但 LangSmith 的 run_tree
+        # 父级在跨线程时容易丢失，导致每次 LLM 调用都注册成独立的根 span
+        # （trace 视图里就成了一堆零散调用，没有上层 graph/node 框架）。
+        self.client = wrap_openai(AsyncOpenAI(api_key=llm_api_key, base_url=llm_base_url))
         self.logger = logging.getLogger(f"Agent.{name}")
 
     @abstractmethod
@@ -138,10 +142,7 @@ class BaseAgent(ABC):
             # Bound concurrent in-flight LLM calls per provider to stay under QPM
             sem = get_llm_semaphore(getattr(self.client, "base_url", "") or "")
             async with sem:
-                response = await asyncio.to_thread(
-                    self.client.chat.completions.create,
-                    **kwargs
-                )
+                response = await self.client.chat.completions.create(**kwargs)
 
             content = response.choices[0].message.content
             duration = int((time.time() - start_time) * 1000)
