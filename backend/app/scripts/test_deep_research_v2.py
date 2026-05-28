@@ -4,7 +4,7 @@
 DeepResearch V2.0 端到端测试
 
 测试完整的多智能体研究工作流程：
-1. ChiefArchitect - 规划研究大纲
+1. Planner - 规划研究大纲（吸收原 ChiefArchitect 职责）
 2. DeepScout - 执行网络搜索（Bocha API）
 3. CodeWizard - 数据分析
 4. LeadWriter - 撰写报告
@@ -212,13 +212,13 @@ async def test_individual_agents():
         print("❌ 缺少必要的环境变量")
         return False
 
-    # 测试 ChiefArchitect
-    print("\n1. 测试 ChiefArchitect (规划)")
+    # 测试 Planner（吸收了原 ChiefArchitect 的大纲生成职责）
+    print("\n1. 测试 Planner (规划)")
     try:
-        from service.deep_research_v2.agents import ChiefArchitect
+        from service.deep_research_v2.agents import Planner
         from service.deep_research_v2.state import create_initial_state
 
-        architect = ChiefArchitect(dashscope_key, llm_base_url, "qwen-max")
+        architect = Planner(dashscope_key, llm_base_url, "qwen-max")
         state = create_initial_state("新能源汽车发展趋势", "test-session-1")
 
         result = await architect.process(state)
@@ -231,7 +231,7 @@ async def test_individual_agents():
             return False
 
     except Exception as e:
-        print(f"   ❌ ChiefArchitect 测试失败: {e}")
+        print(f"   ❌ Planner 测试失败: {e}")
         return False
 
     # 测试 DeepScout

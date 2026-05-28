@@ -31,7 +31,6 @@ from langgraph.graph import StateGraph, END
 
 from .state import ResearchState, ResearchPhase, create_initial_state
 from .agents import (
-    ChiefArchitect,  # 保留到 Task 15 删除 architect.py 前不动
     DeepScout, CodeWizard, CriticMaster, LeadWriter, DataAnalyst,
     Planner, Replanner,
 )
@@ -102,15 +101,13 @@ def route_after_replanner(state: ResearchState) -> str:
 
 class DeepResearchGraph:
     """
-    DeepResearch V2.0 工作流图
+    DeepResearch V3.0 工作流图（Plan-and-Execute supervisor）
 
-    实现完整的多智能体协作流程：
-    1. Plan (ChiefArchitect) - 分析问题，生成研究大纲
-    2. Research (DeepScout) - 并行深度搜索
-    3. Analyze (CodeWizard) - 数据分析和可视化
-    4. Write (LeadWriter) - 撰写报告
-    5. Review (CriticMaster) - 对抗式审核
-    6. Revise (LeadWriter) - 修订（如果需要）
+    4-node 主图：
+    1. Planner: 生成大纲 + plan（含 parallel_group）
+    2. Executor: 调度 @tool 完成 search / analyze / charts / write
+    3. Critic: 审核 + 输出 suggested_actions
+    4. Replanner: 规则驱动把 suggested_actions 翻译成补救 plan
     """
 
     def __init__(
@@ -137,6 +134,7 @@ class DeepResearchGraph:
         self.max_iterations = max_iterations or config.research.max_iterations
 
         # 初始化各个 Agent（使用各自配置的模型）
+        # planner / replanner 共用 architect 配置项（保留命名以兼容现有 llm_config）
         self.planner = Planner(
             self.llm_api_key, self.llm_base_url,
             config.agents.architect.model
@@ -145,10 +143,6 @@ class DeepResearchGraph:
             self.llm_api_key, self.llm_base_url,
             config.agents.architect.model
         )
-        self.architect = ChiefArchitect(
-            self.llm_api_key, self.llm_base_url,
-            config.agents.architect.model
-        )  # 保留 instance 直到 Task 15 删除（避免 run_sync 旧路径破裂）
         self.scout = DeepScout(
             self.llm_api_key, self.llm_base_url, self.search_api_key,
             config.agents.scout.model
@@ -171,7 +165,7 @@ class DeepResearchGraph:
         )
 
         logger.info(f"DeepResearchGraph initialized with models:")
-        logger.info(f"  - Architect: {config.agents.architect.model}")
+        logger.info(f"  - Planner/Replanner: {config.agents.architect.model}")
         logger.info(f"  - Scout: {config.agents.scout.model}")
         logger.info(f"  - DataAnalyst: {config.agents.data_analyst.model}")
         logger.info(f"  - Wizard: {config.agents.wizard.model}")

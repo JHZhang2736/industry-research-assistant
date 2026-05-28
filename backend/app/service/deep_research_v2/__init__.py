@@ -1,14 +1,13 @@
 
 
 """
-DeepResearch V2.0 - 生成式多智能体协作网络
+DeepResearch V3.0 - Plan-and-Execute supervisor
 
-核心特点：
-1. 6 个专家 Agent 协作：ChiefArchitect / DeepScout / DataAnalyst / CodeWizard / CriticMaster / LeadWriter
-2. 动态状态机：Plan -> Research -> Analyze -> Write -> Review -> Revise
-3. 对抗式质检：CriticMaster 确保报告质量
-4. 代码解释器：CodeWizard 支持 Python 数据分析和可视化
-5. LangGraph 实现：支持循环和条件分支
+4-node 主图：planner → executor → critic → (replanner)* → END
+- planner: 生成大纲 + plan（含 parallel_group）
+- executor: 调度 @tool（search_section / analyze_facts / generate_charts / write_section）
+- critic: 审核 + suggested_actions
+- replanner: 规则驱动把 suggested_actions 翻译成补救 plan
 
 使用方式：
 ```python
@@ -34,12 +33,13 @@ from .state import (
 from .graph import DeepResearchGraph, create_research_graph
 
 from .agents import (
-    ChiefArchitect,
     DeepScout,
     DataAnalyst,
     CodeWizard,
     CriticMaster,
-    LeadWriter
+    LeadWriter,
+    Planner,
+    Replanner,
 )
 
 __all__ = [
@@ -53,10 +53,11 @@ __all__ = [
     'create_initial_state',
     'DeepResearchGraph',
     'create_research_graph',
-    'ChiefArchitect',
     'DeepScout',
     'DataAnalyst',
     'CodeWizard',
     'CriticMaster',
     'LeadWriter',
+    'Planner',
+    'Replanner',
 ]

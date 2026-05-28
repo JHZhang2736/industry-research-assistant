@@ -1,13 +1,12 @@
 
 
 """
-DeepResearch V2.0 - Agents 模块
+DeepResearch V3 - Agents 模块
 
-导出所有专家Agent
+导出所有专家 Agent（架构师角色已并入 Planner）
 """
 
 from .base import BaseAgent, AgentRegistry
-from .architect import ChiefArchitect
 from .scout import DeepScout
 from .wizard import CodeWizard
 from .critic import CriticMaster
@@ -19,7 +18,6 @@ from .replanner import Replanner
 __all__ = [
     'BaseAgent',
     'AgentRegistry',
-    'ChiefArchitect',
     'DeepScout',
     'CodeWizard',
     'CriticMaster',
