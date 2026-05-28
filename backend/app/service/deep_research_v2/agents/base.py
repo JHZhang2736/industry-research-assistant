@@ -15,6 +15,12 @@ from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 from openai import OpenAI
 
+try:
+    from langsmith.wrappers import wrap_openai
+except ImportError:  # langsmith 未装时退化为 no-op，保持原 client
+    def wrap_openai(client):
+        return client
+
 from ..state import ResearchState, AgentLog
 from ..concurrency import get_llm_semaphore
 
@@ -39,7 +45,10 @@ class BaseAgent(ABC):
         self.name = name
         self.role = role
         self.model = model
-        self.client = OpenAI(api_key=llm_api_key, base_url=llm_base_url)
+        # wrap_openai：LANGSMITH_TRACING=true 时自动把每次 chat.completions.create
+        # 注册成 LangSmith span（含 prompt/completion/token usage）；
+        # 未开启 tracing 时为零开销 passthrough。
+        self.client = wrap_openai(OpenAI(api_key=llm_api_key, base_url=llm_base_url))
         self.logger = logging.getLogger(f"Agent.{name}")
 
     @abstractmethod
