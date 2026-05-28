@@ -1467,3 +1467,46 @@ URL: {r.get('url', '')}
                     break
 
         state["hypotheses"] = hypotheses
+
+    async def search_with_queries(
+        self,
+        section_id: str,
+        queries: List[str],
+        state: ResearchState,
+    ) -> Dict[str, Any]:
+        """v3 入口：按章节维度执行搜索 + fact 提取
+
+        现有 _execute_deep_search 会通过 _ingest_facts 直接 mutate state['facts']
+        和 state['data_points']。本方法用 snapshot/diff 方案捕获新增项返回，
+        state 仍被 mutate（保留现有逻辑），调用方（executor）应知晓这一点。
+
+        Args:
+            section_id: 当前搜索的章节 ID
+            queries: 要搜的 query 列表
+            state: 共享状态（会被 _execute_deep_search mutate）
+
+        Returns:
+            {"facts": [...], "sources": [...], "section_id": section_id}
+            facts/sources 仅含本次新增项。
+        """
+        facts_before = len(state.get("facts", []))
+        sources_before = len(state.get("raw_sources", []))
+
+        # 复用现有递归搜索逻辑（mutates state）
+        await self._execute_deep_search(
+            state=state,
+            section_id=section_id,
+            queries=queries,
+            search_type="follow_up",
+            hypotheses=state.get("hypotheses", []),
+            depth=1,
+            max_depth=2,
+        )
+
+        new_facts = state.get("facts", [])[facts_before:]
+        new_sources = state.get("raw_sources", [])[sources_before:]
+        return {
+            "facts": new_facts,
+            "sources": new_sources,
+            "section_id": section_id,
+        }

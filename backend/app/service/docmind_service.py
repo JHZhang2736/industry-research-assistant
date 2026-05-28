@@ -10,8 +10,12 @@ from alibabacloud_docmind_api20220711 import models as docmind_models
 from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tea_util import models as util_models
 
-from service.embedding_service import generate_embedding
-from service.milvus_service import get_milvus_service
+try:
+    from service.embedding_service import generate_embedding
+    from service.milvus_service import get_milvus_service
+except ImportError:
+    from app.service.embedding_service import generate_embedding
+    from app.service.milvus_service import get_milvus_service
 
 
 class DocMindService:

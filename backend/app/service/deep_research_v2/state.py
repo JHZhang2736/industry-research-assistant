@@ -93,6 +93,44 @@ class CriticFeedback:
 
 
 @dataclass
+class PlanStep:
+    """Planner 输出的单个执行步骤
+
+    Attributes:
+        step_id: 唯一 ID（planner 生成，格式如 'step_1', 'step_2'）
+        tool: tool 名称（'search_section' / 'analyze_facts' / 'generate_charts' / 'write_section'）
+        args: tool 调用参数（JSON-serializable dict）
+        depends_on: 依赖的前置 step_id 列表；空表示无依赖
+        parallel_group: 同 group 内的 step 可并行通过 Send API；None 表示串行执行
+    """
+    step_id: str
+    tool: str
+    args: Dict[str, Any]
+    depends_on: List[str] = field(default_factory=list)
+    parallel_group: Optional[str] = None
+
+
+@dataclass
+class StepResult:
+    """Executor 执行单个 step 后的结果记录
+
+    Attributes:
+        step_id: 对应的 PlanStep.step_id
+        tool: 调用的 tool 名称（冗余便于查询）
+        status: 'success' / 'failed' / 'skipped'
+        output: tool 返回的 dict，失败时为 None
+        error: 失败时的错误消息
+        duration_ms: 执行耗时（毫秒）
+    """
+    step_id: str
+    tool: str
+    status: Literal["success", "failed", "skipped"]
+    output: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+
+@dataclass
 class AgentLog:
     """Agent执行日志"""
     timestamp: datetime
@@ -151,6 +189,12 @@ class ResearchState(TypedDict):
     quality_score: float                    # 质量评分
     pending_search_queries: List[str]       # 待执行的补充搜索查询（审核后需要补充的）
 
+    # === Plan-and-Execute 新增字段（v3 架构）===
+    plan: List[Dict[str, Any]]              # PlanStep 序列化列表（planner 输出，executor 消费）
+    completed_steps: List[Dict[str, Any]]   # StepResult 序列化列表（executor 写入）
+    replan_count: int                       # 累计 replan 次数（控制上限）
+    fallback_triggered: bool                # ReAct fallback 标志（v1 期恒 False）
+
     # 元数据
     logs: List[Dict[str, Any]]              # 执行日志
     errors: List[str]                       # 错误记录
@@ -198,6 +242,10 @@ def create_initial_state(
         unresolved_issues=0,
         quality_score=0.0,
         pending_search_queries=[],
+        plan=[],
+        completed_steps=[],
+        replan_count=0,
+        fallback_triggered=False,
         logs=[],
         errors=[],
         messages=[]
