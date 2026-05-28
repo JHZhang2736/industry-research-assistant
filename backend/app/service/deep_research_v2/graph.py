@@ -291,12 +291,40 @@ class DeepResearchGraph:
         except (ImportError, RuntimeError, KeyError):
             pass
 
+    def _emit_event(self, event_type: str, content: Dict[str, Any]) -> None:
+        """通用 custom stream 事件推送（前端 SSE 直接消费）
+
+        前端的 "研究详情" 面板由 research_step / outline / search_results /
+        knowledge_graph / charts 等具名事件驱动。tool 内部 helper 已经会推
+        content 类事件，这里只补发节点级的 step 容器创建事件。
+        """
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({"type": event_type, "content": content})
+        except (ImportError, RuntimeError, KeyError):
+            pass
+
     async def _planner_node(self, state: ResearchState) -> Dict[str, Any]:
         """planner node 包装：调用 self.planner.process()"""
         self._maybe_cancel(state)
         self._emit_phase_start("planning", "开始规划研究...")
         logger.info("Executing Planner node...")
         result = await self.planner.process(state)
+
+        # 兼容前端：补发 outline 和 research_step:planning，让侧边栏建立 planning 详情
+        outline = result.get("outline", []) if isinstance(result, dict) else []
+        self._emit_event("outline", {
+            "outline": outline,
+            "research_questions": [],
+        })
+        self._emit_event("research_step", {
+            "step_type": "planning",
+            "title": "📋 规划研究大纲",
+            "subtitle": f"生成 {len(outline)} 个章节",
+            "status": "completed",
+            "stats": {"sections_count": len(outline)},
+        })
         return result
 
     async def _critic_node(self, state: ResearchState) -> Dict[str, Any]:
@@ -304,7 +332,29 @@ class DeepResearchGraph:
         self._maybe_cancel(state)
         self._emit_phase_start("reviewing", "开始审核...")
         logger.info("Executing Critic node...")
+        # 在 critic 真正运行前先建一个 reviewing 详情容器
+        self._emit_event("research_step", {
+            "step_type": "reviewing",
+            "title": "🔎 审核报告",
+            "subtitle": "",
+            "status": "running",
+        })
         result = await self.critic.process(state)
+        # 完成态：把 quality_score / unresolved 写入 stats（前端忽略未知字段）
+        if isinstance(result, dict):
+            quality = result.get("quality_score", 0.0)
+            unresolved = result.get("unresolved_issues", 0)
+        else:
+            quality, unresolved = 0.0, 0
+        self._emit_event("research_step", {
+            "step_type": "reviewing",
+            "title": "🔎 审核报告",
+            "status": "completed",
+            "stats": {
+                "quality_score": quality,
+                "unresolved_issues": unresolved,
+            },
+        })
         return result
 
     async def _replanner_node(self, state: ResearchState) -> Dict[str, Any]:

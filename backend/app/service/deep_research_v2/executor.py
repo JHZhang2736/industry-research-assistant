@@ -7,7 +7,7 @@ Executor 负责按 plan 调度 tools，处理并行组，merge tool 返回结果
 import time
 import asyncio
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
 from .state import ResearchState
 from .tools import search_section, analyze_facts, generate_charts, write_section
@@ -21,6 +21,77 @@ TOOL_REGISTRY = {
     "generate_charts": generate_charts,
     "write_section": write_section,
 }
+
+
+# tool 名 -> 前端 research_step.step_type（驱动侧边栏详情容器）
+# search_section 故意映射到 'searching'（前端 search_results 优先找 searching）
+# generate_charts 复用 'analyzing'（前端 charts 事件 attach 到 analyzing 详情）
+TOOL_TO_STEP_TYPE = {
+    "search_section": "searching",
+    "analyze_facts": "analyzing",
+    "generate_charts": "analyzing",
+    "write_section": "writing",
+}
+
+STEP_TYPE_META = {
+    "searching": ("🔍 深度搜索", "并行检索各章节资料"),
+    "analyzing": ("📊 数据分析", "提取数据点 + 构建知识图谱"),
+    "writing": ("✍️ 撰写报告", "按章节生成 Markdown"),
+}
+
+
+def _emit(event_type: str, content: Dict[str, Any]) -> None:
+    """安全推送 custom stream 事件（非 graph 上下文时静默丢弃）"""
+    try:
+        from langgraph.config import get_stream_writer
+        writer = get_stream_writer()
+        writer({"type": event_type, "content": content})
+    except (ImportError, RuntimeError, KeyError):
+        pass
+
+
+def _stats_for(
+    step_type: str,
+    facts: List[Any],
+    sources: List[Any],
+    kg: Dict[str, Any],
+    charts: List[Any],
+    draft_sections: Dict[str, Any],
+) -> Dict[str, Any]:
+    """根据当前合并后的累计数据生成前端期望的 stats（snake_case）"""
+    if step_type == "searching":
+        return {
+            "results_count": len(facts),
+            "sources_count": len(sources),
+        }
+    if step_type == "analyzing":
+        return {
+            "entities_count": len(kg.get("nodes", [])),
+            "charts_count": len(charts),
+        }
+    if step_type == "writing":
+        word_count = sum(len(c or "") for c in draft_sections.values())
+        return {
+            "sections_count": len(draft_sections),
+            "word_count": word_count,
+        }
+    return {}
+
+
+def _emit_step(
+    step_type: str,
+    status: str,
+    stats: Dict[str, Any] | None = None,
+) -> None:
+    title, subtitle = STEP_TYPE_META.get(step_type, (step_type, ""))
+    _emit("research_step", {
+        "step_type": step_type,
+        "title": title,
+        "subtitle": subtitle,
+        "status": status,
+        "stats": stats or {},
+    })
+
 
 
 def pick_next_parallel_batch(
@@ -127,11 +198,24 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
     merged_insights = list(state.get("insights", []))
     merged_draft_sections = dict(state.get("draft_sections", {}))
 
+    started_steps: Set[str] = set()
+
     while not all_steps_done(plan, completed):
         batch = pick_next_parallel_batch(plan, completed)
         if not batch:
             logger.error("executor deadlock: no ready steps but plan not done")
             break
+
+        # 在批次开跑前，为本批次涉及的 step_type 建容器（前端 research_step:running）
+        batch_step_types = {
+            TOOL_TO_STEP_TYPE[s["tool"]]
+            for s in batch
+            if s["tool"] in TOOL_TO_STEP_TYPE
+        }
+        for st in batch_step_types:
+            if st not in started_steps:
+                _emit_step(st, status="running")
+                started_steps.add(st)
 
         results = await asyncio.gather(*[
             execute_one_step(step, state) for step in batch
@@ -161,6 +245,20 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
                 content = output.get("content", "")
                 if sec_id:
                     merged_draft_sections[sec_id] = content
+
+        # 批次结束后，更新本批涉及 step_type 的累计 stats（仍 status=running，直到全 plan 完成）
+        for st in batch_step_types:
+            _emit_step(st, status="running", stats=_stats_for(
+                st, merged_facts, merged_sources, merged_knowledge_graph,
+                merged_charts, merged_draft_sections,
+            ))
+
+    # 整个 plan 跑完后，把开过的每个 step_type 标 completed
+    for st in started_steps:
+        _emit_step(st, status="completed", stats=_stats_for(
+            st, merged_facts, merged_sources, merged_knowledge_graph,
+            merged_charts, merged_draft_sections,
+        ))
 
     return {
         "completed_steps": completed,
