@@ -42,21 +42,52 @@ PLANNER_PROMPT = """你是一位行业研究的总规划师。给定一个研究
   ],
   "plan": [
     {
-      "step_id": "step_1",
+      "step_id": "step_search_sec_1",
       "tool": "search_section",
       "args": { "section_id": "sec_1", "queries": ["关键词1", "关键词2"] },
       "depends_on": [],
       "parallel_group": "search_batch"
+    },
+    {
+      "step_id": "step_search_sec_2",
+      "tool": "search_section",
+      "args": { "section_id": "sec_2", "queries": ["..."] },
+      "depends_on": [],
+      "parallel_group": "search_batch"
+    },
+    {
+      "step_id": "step_analyze",
+      "tool": "analyze_facts",
+      "args": {},
+      "depends_on": ["step_search_sec_1", "step_search_sec_2", "...所有 search step_id..."],
+      "parallel_group": null
+    },
+    {
+      "step_id": "step_charts",
+      "tool": "generate_charts",
+      "args": {},
+      "depends_on": ["step_analyze"],
+      "parallel_group": null
+    },
+    {
+      "step_id": "step_write_sec_1",
+      "tool": "write_section",
+      "args": { "section_id": "sec_1" },
+      "depends_on": ["step_analyze", "step_charts"],
+      "parallel_group": "write_batch"
     }
   ]
 }
 ```
 
-## parallel_group 规则
+## 依赖与并行规则（必须严格遵守）
 
-- 所有 `search_section` step → group "search_batch"（6 章节并行搜）
-- `analyze_facts` / `generate_charts` → null（串行）
-- 所有 `write_section` step → group "write_batch"（6 章节并行写）
+- `search_section`：`depends_on=[]`，`parallel_group="search_batch"`（所有章节并行搜）
+- `analyze_facts`：`depends_on=[所有 search_section 的 step_id]`，`parallel_group=null`（串行）
+- `generate_charts`：`depends_on=[analyze_facts 的 step_id]`，`parallel_group=null`（串行）
+- `write_section`：`depends_on=[analyze_facts 的 step_id, generate_charts 的 step_id]`，`parallel_group="write_batch"`（章节间并行写）
+
+> 错的 depends_on 会让数据分析拿不到搜索结果，直接产空报告。务必按上述规则填。
 
 ## 研究问题
 
@@ -105,6 +136,10 @@ class Planner(BaseAgent):
             if not outline or not plan:
                 raise ValueError("planner output missing outline or plan")
 
+            # LLM 经常瞎填 depends_on / parallel_group（especially for analyze/charts/write），
+            # 这里按 tool 类型确定性地重写拓扑，保证 executor 能按正确顺序调度。
+            plan = self._enforce_plan_topology(plan)
+
             self.add_message(state, "plan_ready", f"📋 生成 {len(outline)} 章节 / {len(plan)} 个执行步骤")
             return {"outline": outline, "plan": plan}
 
@@ -112,6 +147,37 @@ class Planner(BaseAgent):
             logger.warning(f"Planner LLM failed, using fallback template: {e}")
             self.add_message(state, "warning", f"⚠️ Planner LLM 失败，使用本地模板：{e}")
             return self._fallback_template(query)
+
+    def _enforce_plan_topology(self, plan: list) -> list:
+        """按 tool 类型重写 depends_on / parallel_group（不动 args/step_id）。
+
+        规则：
+        - search_section: deps=[], group="search_batch"
+        - analyze_facts: deps=[所有 search step_id], group=None
+        - generate_charts: deps=[analyze step_id], group=None
+        - write_section: deps=[analyze step_id, charts step_id], group="write_batch"
+
+        未知 tool 保持原样。
+        """
+        search_ids = [s["step_id"] for s in plan if s.get("tool") == "search_section"]
+        analyze_ids = [s["step_id"] for s in plan if s.get("tool") == "analyze_facts"]
+        charts_ids = [s["step_id"] for s in plan if s.get("tool") == "generate_charts"]
+
+        for step in plan:
+            tool = step.get("tool")
+            if tool == "search_section":
+                step["depends_on"] = []
+                step["parallel_group"] = "search_batch"
+            elif tool == "analyze_facts":
+                step["depends_on"] = list(search_ids)
+                step["parallel_group"] = None
+            elif tool == "generate_charts":
+                step["depends_on"] = list(analyze_ids)
+                step["parallel_group"] = None
+            elif tool == "write_section":
+                step["depends_on"] = list(analyze_ids) + list(charts_ids)
+                step["parallel_group"] = "write_batch"
+        return plan
 
     def _fallback_template(self, query: str) -> Dict[str, Any]:
         """LLM 失败时的兜底：返回固定 6 章节模板"""
