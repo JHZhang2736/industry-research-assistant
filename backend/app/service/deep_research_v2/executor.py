@@ -23,6 +23,20 @@ TOOL_REGISTRY = {
 }
 
 
+def _resolve_callable(tool_obj):
+    """从 @tool 包装拿到底层 coroutine 函数。
+
+    LangChain @tool.ainvoke 会用 pydantic v2 对参数做 schema 验证 ——
+    对 TypedDict 参数（ResearchState）会构造新 dict 并递归验证 List[Fact] 等
+    内部字段，导致 search_section 在 tool 上下文里 append 的 facts 落到新对象上，
+    后续 analyze_facts 从原 state 读到的还是空 list。直接调底层 coroutine 跳过
+    校验，state 按引用透传。
+    """
+    # langchain_core StructuredTool: async 函数存在 .coroutine，sync 存在 .func
+    fn = getattr(tool_obj, "coroutine", None) or getattr(tool_obj, "func", None)
+    return fn or tool_obj
+
+
 # tool 名 -> 前端 research_step.step_type（驱动侧边栏详情容器）
 # search_section 故意映射到 'searching'（前端 search_results 优先找 searching）
 # generate_charts 复用 'analyzing'（前端 charts 事件 attach 到 analyzing 详情）
@@ -158,7 +172,10 @@ async def execute_one_step(
 
     start = time.time()
     try:
-        output = await tool_fn.ainvoke({**args, "state": state})
+        # 直接调底层 coroutine，绕过 @tool.ainvoke 的 pydantic schema 校验
+        # （否则 ResearchState TypedDict 会被复制成新 dict，state mutation 不穿透）
+        callable_fn = _resolve_callable(tool_fn)
+        output = await callable_fn(**args, state=state)
         return {
             "step_id": step_id,
             "tool": tool_name,

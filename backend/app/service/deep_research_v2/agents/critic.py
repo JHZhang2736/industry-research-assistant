@@ -101,6 +101,12 @@ class CriticMaster(BaseAgent):
 
 注意：quality_score >= 7 时才能设置 verdict 为 "pass"
 
+⚠️ 关键约束：当 verdict 不是 "pass" 时（即 quality_score < 7），
+`suggested_actions` **必须非空**，并且对每个出现 critical/major 问题的章节，
+至少给一条对应的 action（retry_search/rewrite/add_data）。
+**绝对不允许出现"verdict=needs_revision 但 suggested_actions=[]"** 这种自相矛盾的输出。
+否则你的输出会被判为失败。
+
 开始你的审核："""
 
     FINAL_CHECK_PROMPT = """你是最终质量把关人。这是修订后的研究报告。

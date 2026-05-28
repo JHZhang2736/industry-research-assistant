@@ -28,19 +28,34 @@ def test_graph_compiled_has_4_main_nodes(graph):
 
 
 def test_route_after_critic_pass_returns_end():
-    """suggested_actions 空 / unresolved_issues=0 → END"""
+    """verdict=pass + 高分 → END"""
     from app.service.deep_research_v2.graph import route_after_critic
     state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "pass"
+    state["quality_score"] = 8.5
     state["unresolved_issues"] = 0
     state["suggested_actions"] = []
     state["replan_count"] = 0
     assert route_after_critic(state) == "END"
 
 
+def test_route_after_critic_low_score_no_actions_still_replans():
+    """新规则：critic 给低分但忘填 suggested_actions 也应触发 replanner"""
+    from app.service.deep_research_v2.graph import route_after_critic
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
+    state["quality_score"] = 4.5
+    state["unresolved_issues"] = 0
+    state["suggested_actions"] = []
+    state["replan_count"] = 0
+    assert route_after_critic(state) == "replanner"
+
+
 def test_route_after_critic_needs_revision_goes_replanner():
     """有 unresolved + suggested_actions + 未达 max → replanner"""
     from app.service.deep_research_v2.graph import route_after_critic
     state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
     state["unresolved_issues"] = 2
     state["suggested_actions"] = ["retry_search:sec_1"]
     state["replan_count"] = 0
