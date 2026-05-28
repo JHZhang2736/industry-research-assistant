@@ -12,7 +12,29 @@ from typing import Dict, Any, List, Set
 from .state import ResearchState
 from .tools import search_section, analyze_facts, generate_charts, write_section
 
+# 取消标志检查（与 graph.py 同样的 try/except 兼容路径）
+try:
+    from app.router.research_router import is_research_cancelled
+except (ImportError, SyntaxError):
+    try:
+        from router.research_router import is_research_cancelled
+    except (ImportError, SyntaxError):
+        def is_research_cancelled(session_id: str) -> bool:
+            return False
+
 logger = logging.getLogger("deep_research_v3.executor")
+
+
+def _maybe_cancel(state: ResearchState) -> None:
+    """在 executor 内部 batch 边界检查取消标志，命中即抛 CancelledError。
+
+    graph.py 的 _maybe_cancel 只在 node 入口跑；executor 内部跑 N 批 tool（可能
+    几分钟），不在 batch 之间复查的话 cancel 按钮要等整个 executor 结束才生效。
+    """
+    session_id = state.get("session_id", "")
+    if session_id and is_research_cancelled(session_id):
+        logger.info(f"Executor cancelled mid-loop: session={session_id}")
+        raise asyncio.CancelledError(f"research_cancelled:{session_id}")
 
 
 TOOL_REGISTRY = {
@@ -217,7 +239,13 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
 
     started_steps: Set[str] = set()
 
+    # 入口检查一次：planner 跑完到 executor 调度前如果用户已经点 cancel，立刻退
+    _maybe_cancel(state)
+
     while not all_steps_done(plan, completed):
+        # 每批前再查：长 plan 可能跑十几个 batch，cancel 在任一 batch 边界生效
+        _maybe_cancel(state)
+
         batch = pick_next_parallel_batch(plan, completed)
         if not batch:
             logger.error("executor deadlock: no ready steps but plan not done")
