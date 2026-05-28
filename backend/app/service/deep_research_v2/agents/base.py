@@ -17,9 +17,11 @@ from openai import OpenAI
 
 try:
     from langsmith.wrappers import wrap_openai
+    _LANGSMITH_WRAP_AVAILABLE = True
 except ImportError:  # langsmith 未装时退化为 no-op，保持原 client
     def wrap_openai(client):
         return client
+    _LANGSMITH_WRAP_AVAILABLE = False
 
 from ..state import ResearchState, AgentLog
 from ..concurrency import get_llm_semaphore
@@ -118,6 +120,20 @@ class BaseAgent(ABC):
 
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
+
+            # 给 LangSmith span 一个有意义的名字，便于在 trace 里区分是哪个 agent
+            # 在做什么——否则所有 LLM 调用都显示成 "OpenAI"。仅当 client 被
+            # wrap_openai 包过才传 langsmith_extra（裸 openai client 会拒收）。
+            if _LANGSMITH_WRAP_AVAILABLE:
+                kwargs["langsmith_extra"] = {
+                    "name": f"{self.name}.{action}",
+                    "metadata": {
+                        "agent": self.name,
+                        "action": action,
+                        "model": self.model,
+                    },
+                    "tags": [self.name, action.split(".")[0] if "." in action else action],
+                }
 
             # Bound concurrent in-flight LLM calls per provider to stay under QPM
             sem = get_llm_semaphore(getattr(self.client, "base_url", "") or "")

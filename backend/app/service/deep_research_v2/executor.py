@@ -37,6 +37,40 @@ def _maybe_cancel(state: ResearchState) -> None:
         raise asyncio.CancelledError(f"research_cancelled:{session_id}")
 
 
+async def _gather_with_cancel_watch(
+    state: ResearchState,
+    batch: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """跑一个 batch，同时起一个 watcher 协程每秒查 cancel 标志。
+
+    命中即 cancel 整个 gather task —— 在跑的 tool 调用会收到 CancelledError
+    并立刻退出（包括 await 中的 LLM/HTTP）。比 batch 边界检查激进得多：
+    最坏延迟约 1 秒而不是整批跑完。
+    """
+    gather_task = asyncio.create_task(asyncio.gather(*[
+        execute_one_step(step, state) for step in batch
+    ]))
+
+    session_id = state.get("session_id", "")
+
+    async def _watch() -> None:
+        while not gather_task.done():
+            if session_id and is_research_cancelled(session_id):
+                logger.info(
+                    f"Cancel flag detected mid-batch, aborting tasks: session={session_id}"
+                )
+                gather_task.cancel()
+                return
+            await asyncio.sleep(1.0)
+
+    watcher = asyncio.create_task(_watch()) if session_id else None
+    try:
+        return await gather_task
+    finally:
+        if watcher and not watcher.done():
+            watcher.cancel()
+
+
 TOOL_REGISTRY = {
     "search_section": search_section,
     "analyze_facts": analyze_facts,
@@ -262,9 +296,7 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
                 _emit_step(st, status="running")
                 started_steps.add(st)
 
-        results = await asyncio.gather(*[
-            execute_one_step(step, state) for step in batch
-        ])
+        results = await _gather_with_cancel_watch(state, batch)
 
         for result in results:
             completed.append(result)
