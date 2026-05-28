@@ -171,8 +171,7 @@ class DeepResearchV2Service:
             "charts": state.get("charts", []),
             "references": state.get("references", []),
             "insights": state.get("insights", []),
-            "iterations": state.get("iteration", 0),
-            "phase": state.get("phase", ""),
+            "iterations": state.get("replan_count", 0),
             "logs": state.get("logs", [])
         }
 
