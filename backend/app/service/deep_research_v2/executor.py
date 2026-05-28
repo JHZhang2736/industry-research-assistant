@@ -43,29 +43,31 @@ async def _gather_with_cancel_watch(
 ) -> List[Dict[str, Any]]:
     """跑一个 batch，同时起一个 watcher 协程每秒查 cancel 标志。
 
-    命中即 cancel 整个 gather task —— 在跑的 tool 调用会收到 CancelledError
+    命中即 cancel 整个 gather future —— 在跑的 tool 调用会收到 CancelledError
     并立刻退出（包括 await 中的 LLM/HTTP）。比 batch 边界检查激进得多：
     最坏延迟约 1 秒而不是整批跑完。
     """
-    gather_task = asyncio.create_task(asyncio.gather(*[
+    # asyncio.gather 已经返回一个自动调度的 _GatheringFuture，不能再 wrap
+    # 到 create_task 里（Py 3.11+ 会报 TypeError: a coroutine was expected）。
+    gather_future = asyncio.gather(*[
         execute_one_step(step, state) for step in batch
-    ]))
+    ])
 
     session_id = state.get("session_id", "")
 
     async def _watch() -> None:
-        while not gather_task.done():
+        while not gather_future.done():
             if session_id and is_research_cancelled(session_id):
                 logger.info(
                     f"Cancel flag detected mid-batch, aborting tasks: session={session_id}"
                 )
-                gather_task.cancel()
+                gather_future.cancel()
                 return
             await asyncio.sleep(1.0)
 
     watcher = asyncio.create_task(_watch()) if session_id else None
     try:
-        return await gather_task
+        return await gather_future
     finally:
         if watcher and not watcher.done():
             watcher.cancel()
