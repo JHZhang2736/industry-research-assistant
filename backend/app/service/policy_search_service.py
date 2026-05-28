@@ -11,7 +11,10 @@ from pymilvus import (
     DataType,
     utility,
 )
-from app.service.embedding_service import generate_embedding
+try:
+    from service.embedding_service import generate_embedding
+except ImportError:
+    from app.service.embedding_service import generate_embedding
 
 
 class PolicySearchService:

@@ -7,7 +7,10 @@ from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Integer, BigI
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import relationship
 
-from app.core.database import Base
+try:
+    from core.database import Base
+except ImportError:
+    from app.core.database import Base
 
 
 class ChatAttachment(Base):
