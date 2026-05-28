@@ -260,6 +260,37 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
             merged_charts, merged_draft_sections,
         ))
 
+    # 按 outline 顺序拼装 final_report（并行写完后，draft_sections 的 dict
+    # 顺序是完成顺序——必须按 outline 重排，否则报告章节会乱序）
+    final_report = ""
+    if merged_draft_sections:
+        outline = state.get("outline", [])
+        parts: List[str] = []
+        for section in outline:
+            sec_id = section.get("id")
+            content = merged_draft_sections.get(sec_id, "").strip()
+            if not content:
+                continue
+            # 单章节内容可能已包含 # 标题，也可能没有；统一在外层加 ## 标题
+            title = section.get("title", sec_id)
+            parts.append(f"## {title}\n\n{content}")
+        # 兜底：outline 之外但 draft_sections 里有的（不应发生）追加在末尾
+        seen_ids = {s.get("id") for s in outline}
+        for sec_id, content in merged_draft_sections.items():
+            if sec_id in seen_ids:
+                continue
+            stripped = (content or "").strip()
+            if stripped:
+                parts.append(f"## {sec_id}\n\n{stripped}")
+        final_report = "\n\n".join(parts)
+
+        # 通知前端用 outline 顺序的版本覆盖此前按到达顺序拼出来的 streamingReport
+        _emit("report_draft", {
+            "content": final_report,
+            "word_count": len(final_report),
+            "references_count": len(state.get("references", [])),
+        })
+
     return {
         "completed_steps": completed,
         "facts": merged_facts,
@@ -270,4 +301,5 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
         "code_executions": merged_code_executions,
         "insights": merged_insights,
         "draft_sections": merged_draft_sections,
+        "final_report": final_report,
     }
