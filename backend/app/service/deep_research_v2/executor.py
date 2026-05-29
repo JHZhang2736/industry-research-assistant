@@ -153,7 +153,6 @@ def _stats_for(
     step_type: str,
     facts: List[Any],
     sources: List[Any],
-    kg: Dict[str, Any],
     charts: List[Any],
     draft_sections: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -165,7 +164,6 @@ def _stats_for(
         }
     if step_type == "analyzing":
         return {
-            "entities_count": len(kg.get("nodes", [])),
             "charts_count": len(charts),
         }
     if step_type == "writing":
@@ -344,10 +342,6 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
     merged_facts = list(state.get("facts", []))
     merged_sources = list(state.get("raw_sources", []))
     merged_data_points = list(state.get("data_points", []))
-    merged_knowledge_graph = {
-        "nodes": list(state.get("knowledge_graph", {}).get("nodes", [])),
-        "edges": list(state.get("knowledge_graph", {}).get("edges", [])),
-    }
     merged_charts = list(state.get("charts", []))
     merged_code_executions = list(state.get("code_executions", []))
     merged_insights = list(state.get("insights", []))
@@ -391,10 +385,6 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
                 merged_sources.extend(output.get("sources", []))
             elif result["tool"] == "analyze_facts":
                 merged_data_points.extend(output.get("data_points", []))
-                kg = output.get("knowledge_graph", {})
-                if kg:
-                    merged_knowledge_graph["nodes"].extend(kg.get("nodes", []))
-                    merged_knowledge_graph["edges"].extend(kg.get("edges", []))
                 merged_insights.extend(output.get("insights", []))
             elif result["tool"] == "generate_charts":
                 merged_charts.extend(output.get("charts", []))
@@ -408,14 +398,14 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
         # 批次结束后，更新本批涉及 step_type 的累计 stats（仍 status=running，直到全 plan 完成）
         for st in batch_step_types:
             _emit_step(st, status="running", stats=_stats_for(
-                st, merged_facts, merged_sources, merged_knowledge_graph,
+                st, merged_facts, merged_sources,
                 merged_charts, merged_draft_sections,
             ))
 
     # 整个 plan 跑完后，把开过的每个 step_type 标 completed
     for st in started_steps:
         _emit_step(st, status="completed", stats=_stats_for(
-            st, merged_facts, merged_sources, merged_knowledge_graph,
+            st, merged_facts, merged_sources,
             merged_charts, merged_draft_sections,
         ))
 
@@ -455,7 +445,6 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
         "facts": merged_facts,
         "raw_sources": merged_sources,
         "data_points": merged_data_points,
-        "knowledge_graph": merged_knowledge_graph,
         "charts": merged_charts,
         "code_executions": merged_code_executions,
         "insights": merged_insights,

@@ -76,7 +76,7 @@ def test_scout_instance_is_singleton():
 
 @pytest.mark.asyncio
 async def test_analyze_facts_returns_data_points(monkeypatch):
-    """analyze_facts 返回 {'data_points': [...], 'knowledge_graph': {...}, 'insights': [...]}"""
+    """analyze_facts 返回 {'data_points': [...], 'insights': [...]}"""
     from app.service.deep_research_v2.tools import analyze_facts
 
     state = create_initial_state(query="测试", session_id="sid_1")
@@ -85,7 +85,6 @@ async def test_analyze_facts_returns_data_points(monkeypatch):
     mock_analyst = AsyncMock()
     mock_analyst.extract_data_points = AsyncMock(return_value={
         "data_points": [{"name": "5G 用户数", "value": 10, "unit": "亿"}],
-        "knowledge_graph": {"nodes": [{"id": "n1"}], "edges": []},
         "insights": ["增长强劲"],
     })
     monkeypatch.setattr(
@@ -96,7 +95,6 @@ async def test_analyze_facts_returns_data_points(monkeypatch):
     result = await analyze_facts.ainvoke({"state": state})
 
     assert "data_points" in result
-    assert "knowledge_graph" in result
     assert "insights" in result
     assert result["data_points"][0]["name"] == "5G 用户数"
 

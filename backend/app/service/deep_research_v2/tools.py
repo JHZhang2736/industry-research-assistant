@@ -95,7 +95,7 @@ def get_analyst_instance() -> DataAnalyst:
 
 @tool
 async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
-    """从已收集的 facts 中提取 data points + 构建知识图谱 + 生成 insights。
+    """从已收集的 facts 中提取 data points + 生成 insights。
 
     Args:
         state: 共享 ResearchState，读取 state["facts"]
@@ -103,7 +103,6 @@ async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
     Returns:
         {
             "data_points": [...],
-            "knowledge_graph": {"nodes": [...], "edges": [...]},
             "insights": [str, ...],
         }
     """
@@ -114,7 +113,6 @@ async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
         logger.exception(f"analyze_facts failed: {e}")
         return {
             "data_points": [],
-            "knowledge_graph": {"nodes": [], "edges": []},
             "insights": [],
             "error": str(e),
         }

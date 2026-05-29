@@ -436,28 +436,6 @@ export default function Index() {
               }
             }
 
-            // V2 知识图谱事件
-            if (json.type === 'knowledge_graph') {
-              const content = json.content || json
-              const graph = content.graph || content
-              // 优先存储到 analyzing，其次 researching/searching - 使用 stepType 作为 key
-              const targetType = researchDetailsRef.current.has('analyzing') ? 'analyzing'
-                : researchDetailsRef.current.has('researching') ? 'researching' : 'searching'
-              const detail = researchDetailsRef.current.get(targetType)
-              console.log(`[前端] knowledge_graph: key=${targetType}, detail=${detail ? '找到' : '未找到'}, nodes=${graph.nodes?.length || 0}, edges=${graph.edges?.length || 0}`)
-              if (detail) {
-                detail.knowledgeGraph = {
-                  nodes: graph.nodes || [],
-                  edges: graph.edges || [],
-                  stats: content.stats || graph.stats,
-                }
-                setSelectedResearchDetail({ ...detail })
-                setResearchDataVersion(v => v + 1)
-                console.log(`[前端] knowledge_graph: ✅ 已存储到 detail[${targetType}]`)
-              } else {
-                console.warn(`[前端] knowledge_graph: ⚠️ 未找到 detail, 可用 keys:`, Array.from(researchDetailsRef.current.keys()))
-              }
-            }
 
             // V2 图表事件 (DataAnalyst 发送的 ECharts 图表)
             if (json.type === 'charts') {
@@ -605,7 +583,7 @@ export default function Index() {
                 // 打印所有 detail 的状态
                 console.log(`[前端] research_complete: 所有 detail keys:`, Array.from(researchDetailsRef.current.keys()))
                 researchDetailsRef.current.forEach((d, k) => {
-                  console.log(`[前端] detail[${k}]: searchResults=${d.searchResults?.length || 0}, charts=${d.charts?.length || 0}, hasGraph=${!!d.knowledgeGraph}, hasReport=${!!d.streamingReport}`)
+                  console.log(`[前端] detail[${k}]: searchResults=${d.searchResults?.length || 0}, charts=${d.charts?.length || 0}, hasReport=${!!d.streamingReport}`)
                 })
               }
               // 设置引用
@@ -1269,7 +1247,6 @@ export default function Index() {
               steps: uiState?.research_steps?.length || 0,
               searchResults: uiState?.search_results?.length || 0,
               charts: uiState?.charts?.length || 0,
-              hasKnowledgeGraph: !!uiState?.knowledge_graph,
               hasReport: !!uiState?.streaming_report,
             })
 
@@ -1331,16 +1308,6 @@ export default function Index() {
                 }
               }
 
-              // 恢复知识图谱 - 使用 stepType 作为 key
-              if (uiState.knowledge_graph && (uiState.knowledge_graph.nodes?.length > 0 || uiState.knowledge_graph.edges?.length > 0)) {
-                const targetType = researchDetailsRef.current.has('analyzing') ? 'analyzing'
-                  : researchDetailsRef.current.has('researching') ? 'researching' : 'searching'
-                const detail = researchDetailsRef.current.get(targetType)
-                if (detail) {
-                  detail.knowledgeGraph = uiState.knowledge_graph
-                  console.log('[恢复状态] 恢复知识图谱:', uiState.knowledge_graph.nodes?.length || 0, '节点')
-                }
-              }
 
               // 恢复图表 - 使用 stepType 作为 key
               if (uiState.charts && uiState.charts.length > 0) {
@@ -1452,7 +1419,6 @@ export default function Index() {
               finalSummary[`detail_${stepId}`] = {
                 searchResults: detail.searchResults?.length || 0,
                 charts: detail.charts?.length || 0,
-                hasKnowledgeGraph: !!detail.knowledgeGraph,
                 hasReport: !!detail.streamingReport,
               }
             })
@@ -1557,21 +1523,16 @@ export default function Index() {
 
     // 从所有步骤中收集数据
     let allSearchResults: ResearchDetailData['searchResults'] = []
-    let knowledgeGraph: ResearchDetailData['knowledgeGraph'] = undefined
     let allCharts: ResearchDetailData['charts'] = []
     let streamingReport = ''
     let allSections: ResearchDetailData['sections'] = []
 
     researchDetailsRef.current.forEach((detail, stepId) => {
-      console.log(`[前端] 聚合步骤 ${stepId}: searchResults=${detail.searchResults?.length || 0}, charts=${detail.charts?.length || 0}, hasGraph=${!!detail.knowledgeGraph}, hasReport=${!!detail.streamingReport}, sections=${detail.sections?.length || 0}`)
+      console.log(`[前端] 聚合步骤 ${stepId}: searchResults=${detail.searchResults?.length || 0}, charts=${detail.charts?.length || 0}, hasReport=${!!detail.streamingReport}, sections=${detail.sections?.length || 0}`)
 
       // 收集搜索结果
       if (detail.searchResults && detail.searchResults.length > 0) {
         allSearchResults = [...allSearchResults!, ...detail.searchResults]
-      }
-      // 取最新的知识图谱
-      if (detail.knowledgeGraph) {
-        knowledgeGraph = detail.knowledgeGraph
       }
       // 收集图表
       if (detail.charts && detail.charts.length > 0) {
@@ -1587,7 +1548,7 @@ export default function Index() {
       }
     })
 
-    console.log(`[前端] 聚合结果: searchResults=${allSearchResults.length}, charts=${allCharts.length}, hasGraph=${!!knowledgeGraph}, hasReport=${!!streamingReport}, sections=${allSections.length}`)
+    console.log(`[前端] 聚合结果: searchResults=${allSearchResults.length}, charts=${allCharts.length}, hasReport=${!!streamingReport}, sections=${allSections.length}`)
 
     // 创建聚合的数据对象
     const aggregated: ResearchDetailData = {
@@ -1596,7 +1557,6 @@ export default function Index() {
       title: selectedResearchDetail?.title || '研究详情',
       subtitle: selectedResearchDetail?.subtitle,
       searchResults: allSearchResults,
-      knowledgeGraph,
       charts: allCharts,
       streamingReport,
       sections: allSections,

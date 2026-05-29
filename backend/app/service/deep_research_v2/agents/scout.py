@@ -715,22 +715,6 @@ URL: {url}
             if duplicate_facts > 0:
                 self.logger.info(f"Deduplicated {duplicate_facts} facts, added {added_facts}")
 
-            # 更新知识图谱
-            entities = analysis.get("entities_discovered", [])
-            if entities:
-                self._update_knowledge_graph(state, entities)
-                self.logger.info(f"Added {len(entities)} entities to knowledge graph")
-                # 发送知识图谱增量更新事件
-                graph = state.get("knowledge_graph", {"nodes": [], "edges": []})
-                self.add_message(state, "knowledge_graph", {
-                    "graph": graph,
-                    "stats": {
-                        "entitiesCount": len(graph.get("nodes", [])),
-                        "relationsCount": len(graph.get("edges", []))
-                    },
-                    "isIncremental": True
-                })
-
             # 更新假设状态
             hypothesis_evidence = analysis.get("hypothesis_evidence", [])
             if hypothesis_evidence:
@@ -1411,36 +1395,6 @@ URL: {r.get('url', '')}
         # 保存指纹
         self.fact_fingerprints[fingerprint] = source_url
         return False
-
-    def _update_knowledge_graph(self, state: ResearchState, entities: List[Dict]) -> None:
-        """更新知识图谱"""
-        graph = state.get("knowledge_graph", {"nodes": [], "edges": []})
-        existing_nodes = {n.get("name") for n in graph["nodes"]}
-
-        for entity in entities:
-            name = entity.get("name", "")
-            if not name or name in existing_nodes:
-                continue
-
-            # 添加节点
-            graph["nodes"].append({
-                "id": f"node_{len(graph['nodes'])}",
-                "name": name,
-                "type": entity.get("type", "unknown"),
-                "discovered_at": datetime.now().isoformat()
-            })
-            existing_nodes.add(name)
-
-            # 添加边（关系）
-            for relation in entity.get("relations", []):
-                # 简单解析关系
-                graph["edges"].append({
-                    "source": name,
-                    "relation": relation,
-                    "discovered_at": datetime.now().isoformat()
-                })
-
-        state["knowledge_graph"] = graph
 
     def _update_hypothesis_status(self, state: ResearchState, evidence: List[Dict]) -> None:
         """根据证据更新假设状态"""

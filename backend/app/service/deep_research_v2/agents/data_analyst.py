@@ -5,9 +5,8 @@ DeepResearch V2.0 - 数据分析师 Agent (DataAnalyst)
 
 职责：
 1. 从搜索结果中提取结构化数据
-2. 构建知识图谱(实体+关系)
-3. 生成可视化图表配置(ECharts)
-4. 识别数据趋势和洞察
+2. 生成可视化图表配置(ECharts)
+3. 识别数据趋势和洞察
 """
 
 import uuid
@@ -20,11 +19,10 @@ from ..state import ResearchState, ResearchPhase
 
 class DataAnalyst(BaseAgent):
     """
-    数据分析师 - 专注于数据提取、知识图谱和可视化
+    数据分析师 - 专注于数据提取和可视化
 
     特点：
     - 从文本中提取结构化数据点
-    - 构建实体关系知识图谱
     - 生成ECharts可视化配置
     - 识别趋势和洞察
     """
@@ -98,49 +96,6 @@ class DataAnalyst(BaseAgent):
 - 只提取有明确来源的数据
 - confidence表示数据可信度(0-1)
 - 如果没有找到相关数据，返回空数组"""
-
-    # 知识图谱构建 Prompt
-    KNOWLEDGE_GRAPH_PROMPT = """你是知识图谱专家，擅长从文本中提取实体和关系。
-
-## 研究主题
-{query}
-
-## 文本内容
-{content}
-
-## 任务
-从以上文本中提取实体和关系，构建知识图谱。
-
-## 实体类型定义
-- core: 核心概念（如：人工智能、大模型）
-- tech: 技术（如：深度学习、计算机视觉、NLP）
-- company: 企业（如：百度、阿里巴巴、华为）
-- policy: 政策（如：AI发展规划、数据安全法）
-- product: 产品（如：ChatGPT、文心一言）
-- person: 人物（如：创始人、CEO）
-
-## 输出要求
-请输出JSON格式：
-```json
-{{
-    "nodes": [
-        {{"id": "ai", "name": "人工智能", "type": "core", "importance": 10}},
-        {{"id": "baidu", "name": "百度", "type": "company", "importance": 8}},
-        {{"id": "cv", "name": "计算机视觉", "type": "tech", "importance": 7}}
-    ],
-    "edges": [
-        {{"source": "baidu", "target": "ai", "relation": "布局"}},
-        {{"source": "cv", "target": "ai", "relation": "属于"}},
-        {{"source": "baidu", "target": "cv", "relation": "研发"}}
-    ]
-}}
-```
-
-注意：
-- importance范围1-10，表示节点重要性
-- 核心概念(core)的importance最高
-- 提取5-15个最重要的实体
-- 关系要简洁，2-4个字"""
 
     # 图表生成 Prompt
     CHART_GENERATION_PROMPT = """你是数据可视化专家，擅长生成ECharts图表配置。
@@ -269,30 +224,16 @@ class DataAnalyst(BaseAgent):
             "title": "数据分析",
             "subtitle": "生成可视化",
             "status": "running",
-            "stats": {"results_count": 0, "charts_count": 0, "entities_count": 0}
+            "stats": {"results_count": 0, "charts_count": 0}
         })
 
         # 1. 提取结构化数据
         extracted_data = await self._extract_data(state)
 
-        # 2. 构建知识图谱
-        knowledge_graph = await self._build_knowledge_graph(state)
-
-        # 3. 生成可视化图表
+        # 2. 生成可视化图表
         charts = await self._generate_charts(state, extracted_data)
 
         # 更新状态
-        if knowledge_graph:
-            state["knowledge_graph"] = knowledge_graph
-            # 发送知识图谱事件
-            self.add_message(state, "knowledge_graph", {
-                "graph": knowledge_graph,
-                "stats": {
-                    "entities_count": len(knowledge_graph.get("nodes", [])),
-                    "relations_count": len(knowledge_graph.get("edges", []))
-                }
-            })
-
         if charts:
             state["charts"].extend(charts)
             self.logger.info(f"[DataAnalyst] 生成了 {len(charts)} 个 ECharts 图表，准备发送 charts 事件")
@@ -312,8 +253,7 @@ class DataAnalyst(BaseAgent):
             "status": "completed",
             "stats": {
                 "results_count": len(state.get("facts", [])),
-                "charts_count": len(charts) if charts else 0,
-                "entities_count": len(knowledge_graph.get("nodes", [])) if knowledge_graph else 0
+                "charts_count": len(charts) if charts else 0
             }
         })
 
@@ -358,45 +298,6 @@ class DataAnalyst(BaseAgent):
             state["insights"].extend(result["insights"])
 
         self.logger.info(f"Extracted {len(result.get('data_points', []))} data points, {len(result.get('time_series', []))} time series")
-
-        return result
-
-    async def _build_knowledge_graph(self, state: ResearchState) -> Dict[str, Any]:
-        """构建知识图谱"""
-        self.logger.info("Building knowledge graph...")
-
-        # 收集内容
-        content_parts = []
-        for fact in state.get("facts", [])[:15]:
-            content_parts.append(fact.get("content", ""))
-
-        if not content_parts:
-            self.logger.info("No content for knowledge graph")
-            return {"nodes": [], "edges": []}
-
-        prompt = self.KNOWLEDGE_GRAPH_PROMPT.format(
-            query=state["query"],
-            content="\n".join(content_parts)
-        )
-
-        response = await self.call_llm(
-            system_prompt="你是知识图谱专家，擅长从文本中提取实体和关系。请输出JSON格式。",
-            user_prompt=prompt,
-            json_mode=True,
-            temperature=0.2,
-            state=state,
-            action="build_knowledge_graph",
-        )
-
-        result = self.parse_json_response(response)
-
-        # 添加节点大小（基于importance）
-        if result.get("nodes"):
-            for node in result["nodes"]:
-                importance = node.get("importance", 5)
-                node["size"] = 20 + importance * 3  # 20-50 range
-
-        self.logger.info(f"Built knowledge graph with {len(result.get('nodes', []))} nodes, {len(result.get('edges', []))} edges")
 
         return result
 
@@ -488,11 +389,10 @@ class DataAnalyst(BaseAgent):
         return self.parse_json_response(response)
 
     async def extract_data_points(self, state: ResearchState) -> Dict[str, Any]:
-        """v3 入口：从 state["facts"] 提取 data_points + 知识图谱 + insights
+        """v3 入口：从 state["facts"] 提取 data_points + insights
 
-        复用现有 _extract_data 和 _build_knowledge_graph 内部逻辑（mutates state）。
-        用 snapshot/diff 方案捕获 data_points/insights 新增项；knowledge_graph
-        直接取 _build_knowledge_graph 的返回值（process() 中是覆盖式 assign）。
+        复用现有 _extract_data 内部逻辑（mutates state）。
+        用 snapshot/diff 方案捕获 data_points/insights 新增项。
 
         state 会被现有方法 mutate（保留兼容），返回 dict 描述本次新增/最终值。
         """
@@ -500,7 +400,6 @@ class DataAnalyst(BaseAgent):
         if not facts:
             return {
                 "data_points": [],
-                "knowledge_graph": {"nodes": [], "edges": []},
                 "insights": [],
             }
 
@@ -509,11 +408,8 @@ class DataAnalyst(BaseAgent):
 
         # 复用现有 _extract_data（mutates state["data_points"] + state["insights"]）
         await self._extract_data(state)
-        # 复用现有 _build_knowledge_graph（返回 dict）
-        kg = await self._build_knowledge_graph(state)
 
         return {
             "data_points": state.get("data_points", [])[dp_before:],
-            "knowledge_graph": kg or {"nodes": [], "edges": []},
             "insights": state.get("insights", [])[insights_before:],
         }
