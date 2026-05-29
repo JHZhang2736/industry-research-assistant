@@ -30,8 +30,8 @@ try:
 except ImportError:
     def traceable(*d_args, **d_kwargs):
         def _decorator(fn):
-            # 同时支持 async / sync 被装饰函数：sync 用 async 包裹会静默返回
-            # coroutine 丢结果（code review Important #1）。
+            # 同时支持 async / sync 被装饰函数：若把 sync 函数用 async 包裹，
+            # 调用方拿到的是 coroutine 而非真实返回值，会静默丢结果。
             if asyncio.iscoroutinefunction(fn):
                 @functools.wraps(fn)
                 async def _async_wrapper(*args, **kwargs):

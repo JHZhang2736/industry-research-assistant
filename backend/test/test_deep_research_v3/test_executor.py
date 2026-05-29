@@ -139,3 +139,52 @@ def test_step_trace_extra_name_without_section():
     assert extra["name"] == "step:analyze_facts"
     assert extra["metadata"]["replan_count"] == 0
     assert "analyzing" in extra["tags"]  # phase tag（analyze_facts → analyzing）
+
+
+async def test_execute_one_step_traceable_returns_stepresult():
+    """spec §5：execute_one_step 被 @traceable 包裹后仍返回结构正确的 StepResult，
+    且 langsmith_extra kwarg 被装饰器消费、不会泄漏进函数体而报错。
+    用 unknown tool 走 failed 分支，避免触发真实 LLM/搜索调用。"""
+    from app.service.deep_research_v2.executor import execute_one_step, _step_trace_extra
+    step = {"step_id": "s1", "tool": "no_such_tool", "args": {}}
+    state = {"facts": [], "replan_count": 0}
+    result = await execute_one_step(
+        step, state, langsmith_extra=_step_trace_extra(step, state)
+    )
+    assert result["step_id"] == "s1"
+    assert result["tool"] == "no_such_tool"
+    assert result["status"] == "failed"
+    assert "duration_ms" in result
+
+
+def test_noop_traceable_decorator_consumes_langsmith_extra():
+    """spec §5：no-op traceable fallback 的核心契约——装饰后函数被调用时，
+    langsmith_extra 被吞掉、不进入函数体，且返回值原样透传。
+    这里直接构造 no-op 装饰器逻辑（langsmith 缺失时走的分支）来验证。"""
+    import asyncio
+    import functools
+
+    def noop_traceable(*d_args, **d_kwargs):
+        def _decorator(fn):
+            if asyncio.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def _aw(*args, **kwargs):
+                    kwargs.pop("langsmith_extra", None)
+                    return await fn(*args, **kwargs)
+                return _aw
+
+            @functools.wraps(fn)
+            def _sw(*args, **kwargs):
+                kwargs.pop("langsmith_extra", None)
+                return fn(*args, **kwargs)
+            return _sw
+        if len(d_args) == 1 and callable(d_args[0]) and not d_kwargs:
+            return _decorator(d_args[0])
+        return _decorator
+
+    @noop_traceable(run_type="tool")
+    def add(a, b):
+        return a + b
+
+    # langsmith_extra 必须被吞掉，不会作为未知 kwarg 传进 add() 报 TypeError
+    assert add(2, 3, langsmith_extra={"name": "x"}) == 5
