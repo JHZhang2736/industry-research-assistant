@@ -680,8 +680,9 @@ class DeepResearchGraph:
         # run_name 用于 LangSmith run 列表展示，去掉换行避免标签里出现字面 \n
         run_label = query[:40].replace("\n", " ").strip() if query else ""
         # 预生成根 run_id：图跑完后用它给根 run 补写 intent/research_type 标签（可靠跨 trace 聚合）
+        # session_id 不放进 tags（会污染 tag 维度聚合），它已在 metadata 里可按字段过滤
         root_run_id = uuid.uuid4()
-        base_tags = ["deep_research_v3"] + ([session_id] if session_id else [])
+        base_tags = ["deep_research_v3"]
         trace_config = {
             "run_id": root_run_id,
             "run_name": f"research: {run_label}" if run_label else "research",
@@ -738,6 +739,7 @@ class DeepResearchGraph:
                     self.checkpoint_service.update_status(session_id, "cancelled")
                 except Exception as e:
                     logger.debug(f"update_status(cancelled) failed (non-fatal): {e}")
+            self._tag_root(root_run_id, base_tags, last_state, extra_tags=["status:cancelled"])
             yield {"type": "research_cancelled", "message": "研究已取消"}
             return
 
@@ -748,14 +750,12 @@ class DeepResearchGraph:
                     self.checkpoint_service.update_status(session_id, "failed", str(e))
                 except Exception as e:
                     logger.debug(f"update_status(failed) failed (non-fatal): {e}")
+            self._tag_root(root_run_id, base_tags, last_state, extra_tags=["status:failed"])
             yield {"type": "error", "content": str(e)}
             return
 
         # 图跑完，给根 run 补写意图/研究类型标签（用于 LangSmith 跨 trace 按意图聚合）
-        # research_type 仅在 deep_research 路径有意义（其余路径 research_type_router 未执行，保持默认值）
-        final_intent = last_state.get("intent")
-        final_rtype = last_state.get("research_type") if final_intent == "deep_research" else None
-        _update_root_run_tags(root_run_id, base_tags, intent=final_intent, research_type=final_rtype)
+        self._tag_root(root_run_id, base_tags, last_state)
 
         # 完成事件：发给前端展示研究结果摘要（final_report、quality_score、统计、references）
         if self.checkpoint_service and session_id:
@@ -765,6 +765,21 @@ class DeepResearchGraph:
                 logger.debug(f"update_status(completed) failed (non-fatal): {e}")
 
         yield self._build_completion_event(last_state)
+
+    def _tag_root(self, root_run_id, base_tags, last_state, extra_tags=None):
+        """从最终 state 提取 intent/research_type，给根 run 补写标签。
+
+        research_type 仅在 deep_research 路径有意义（其余路径 research_type_router
+        未执行，保持默认值，不写入）。extra_tags 用于附加 status:failed/cancelled 等。
+        """
+        intent = last_state.get("intent")
+        research_type = last_state.get("research_type") if intent == "deep_research" else None
+        _update_root_run_tags(
+            root_run_id,
+            list(base_tags) + list(extra_tags or []),
+            intent=intent,
+            research_type=research_type,
+        )
 
     def _build_ui_references(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         """将 state.references + facts 转换为前端友好的引用列表"""
