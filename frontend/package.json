@@ -8,8 +8,7 @@
     "dev": "vite",
     "lint": "eslint .",
     "prepare": "husky",
-    "preview": "vite preview",
-    "postinstall": "chmod +x node_modules/.bin/* 2>/dev/null || true"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
