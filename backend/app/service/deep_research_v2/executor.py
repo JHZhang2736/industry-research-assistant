@@ -6,6 +6,7 @@ Executor 负责按 plan 调度 tools，处理并行组，merge tool 返回结果
 
 import time
 import asyncio
+import functools
 import logging
 from typing import Dict, Any, List, Set
 
@@ -21,6 +22,31 @@ except (ImportError, SyntaxError):
     except (ImportError, SyntaxError):
         def is_research_cancelled(session_id: str) -> bool:
             return False
+
+# LangSmith traceable：给每个 plan step 建独立 span。未安装 langsmith 时退化为
+# 吃掉 langsmith_extra 的透传装饰器（no-op），保证非 langsmith 环境照常运行。
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*d_args, **d_kwargs):
+        def _decorator(fn):
+            # 同时支持 async / sync 被装饰函数：若把 sync 函数用 async 包裹，
+            # 调用方拿到的是 coroutine 而非真实返回值，会静默丢结果。
+            if asyncio.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def _async_wrapper(*args, **kwargs):
+                    kwargs.pop("langsmith_extra", None)
+                    return await fn(*args, **kwargs)
+                return _async_wrapper
+
+            @functools.wraps(fn)
+            def _sync_wrapper(*args, **kwargs):
+                kwargs.pop("langsmith_extra", None)
+                return fn(*args, **kwargs)
+            return _sync_wrapper
+        if len(d_args) == 1 and callable(d_args[0]) and not d_kwargs:
+            return _decorator(d_args[0])
+        return _decorator
 
 logger = logging.getLogger("deep_research_v3.executor")
 
@@ -50,7 +76,8 @@ async def _gather_with_cancel_watch(
     # asyncio.gather 已经返回一个自动调度的 _GatheringFuture，不能再 wrap
     # 到 create_task 里（Py 3.11+ 会报 TypeError: a coroutine was expected）。
     gather_future = asyncio.gather(*[
-        execute_one_step(step, state) for step in batch
+        execute_one_step(step, state, langsmith_extra=_step_trace_extra(step, state))
+        for step in batch
     ])
 
     session_id = state.get("session_id", "")
@@ -165,6 +192,56 @@ def _emit_step(
     })
 
 
+def _trace_step_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """traceable process_inputs：只保留 step 的 tool/args/step_id，丢掉巨大的 state。"""
+    step = inputs.get("step", {}) or {}
+    return {
+        "tool": step.get("tool"),
+        "args": step.get("args", {}),
+        "step_id": step.get("step_id"),
+    }
+
+
+def _trace_step_outputs(outputs: Dict[str, Any]) -> Dict[str, Any]:
+    """traceable process_outputs：把 StepResult 压成计数摘要，不记完整 facts/内容。"""
+    if not isinstance(outputs, dict):
+        return {"result": str(outputs)[:200]}
+    summary = {
+        "status": outputs.get("status"),
+        "duration_ms": outputs.get("duration_ms"),
+    }
+    if outputs.get("error"):
+        summary["error"] = outputs["error"]
+    out = outputs.get("output")
+    if isinstance(out, dict):
+        if "facts" in out:
+            summary["facts_count"] = len(out.get("facts") or [])
+        if "sources" in out:
+            summary["sources_count"] = len(out.get("sources") or [])
+        if "data_points" in out:
+            summary["data_points_count"] = len(out.get("data_points") or [])
+        if "charts" in out:
+            summary["charts_count"] = len(out.get("charts") or [])
+        if out.get("section_id"):
+            summary["section_written"] = out.get("section_id")
+    return summary
+
+
+def _step_trace_extra(step: Dict[str, Any], state: ResearchState) -> Dict[str, Any]:
+    """构造 per-invocation langsmith_extra：动态 span name + metadata + tags。"""
+    tool = step.get("tool", "?")
+    section_id = (step.get("args") or {}).get("section_id")
+    name = f"step:{tool}[{section_id}]" if section_id else f"step:{tool}"
+    phase = TOOL_TO_STEP_TYPE.get(tool, tool)
+    return {
+        "name": name,
+        "metadata": {
+            "replan_count": state.get("replan_count", 0),
+            "step_id": step.get("step_id"),
+        },
+        "tags": [tool, phase],
+    }
+
 
 def pick_next_parallel_batch(
     plan: List[Dict[str, Any]],
@@ -209,6 +286,9 @@ def all_steps_done(
     return all(step["step_id"] in completed_ids for step in plan)
 
 
+@traceable(run_type="tool",
+           process_inputs=_trace_step_inputs,
+           process_outputs=_trace_step_outputs)
 async def execute_one_step(
     step: Dict[str, Any],
     state: ResearchState,

@@ -510,9 +510,19 @@ class DeepResearchGraph:
 
         last_state: Dict[str, Any] = dict(state)
 
+        query = state.get("query", "")
+        # run_name 用于 LangSmith run 列表展示，去掉换行避免标签里出现字面 \n
+        run_label = query[:40].replace("\n", " ").strip() if query else ""
+        trace_config = {
+            "run_name": f"research: {run_label}" if run_label else "research",
+            "metadata": {"session_id": session_id, "query": query},
+            "tags": ["deep_research_v3"] + ([session_id] if session_id else []),
+        }
+
         try:
             async for mode, chunk in self.graph.astream(
                 state,
+                config=trace_config,
                 stream_mode=["custom", "updates"],
             ):
                 if mode == "custom":
