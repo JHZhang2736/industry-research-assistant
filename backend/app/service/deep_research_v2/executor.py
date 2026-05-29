@@ -30,11 +30,20 @@ try:
 except ImportError:
     def traceable(*d_args, **d_kwargs):
         def _decorator(fn):
+            # 同时支持 async / sync 被装饰函数：sync 用 async 包裹会静默返回
+            # coroutine 丢结果（code review Important #1）。
+            if asyncio.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def _async_wrapper(*args, **kwargs):
+                    kwargs.pop("langsmith_extra", None)
+                    return await fn(*args, **kwargs)
+                return _async_wrapper
+
             @functools.wraps(fn)
-            async def _wrapper(*args, **kwargs):
+            def _sync_wrapper(*args, **kwargs):
                 kwargs.pop("langsmith_extra", None)
-                return await fn(*args, **kwargs)
-            return _wrapper
+                return fn(*args, **kwargs)
+            return _sync_wrapper
         if len(d_args) == 1 and callable(d_args[0]) and not d_kwargs:
             return _decorator(d_args[0])
         return _decorator

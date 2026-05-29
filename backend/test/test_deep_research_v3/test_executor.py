@@ -127,6 +127,7 @@ def test_step_trace_extra_name_with_section():
     assert extra["metadata"]["replan_count"] == 1
     assert extra["metadata"]["step_id"] == "s1"
     assert "search_section" in extra["tags"]
+    assert "searching" in extra["tags"]  # phase tag（TOOL_TO_STEP_TYPE 映射）
 
 
 def test_step_trace_extra_name_without_section():
@@ -137,3 +138,4 @@ def test_step_trace_extra_name_without_section():
     extra = _step_trace_extra(step, state)
     assert extra["name"] == "step:analyze_facts"
     assert extra["metadata"]["replan_count"] == 0
+    assert "analyzing" in extra["tags"]  # phase tag（analyze_facts → analyzing）
