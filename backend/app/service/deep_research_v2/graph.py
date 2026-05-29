@@ -310,7 +310,7 @@ class DeepResearchGraph:
         """通用 custom stream 事件推送（前端 SSE 直接消费）
 
         前端的 "研究详情" 面板由 research_step / outline / search_results /
-        knowledge_graph / charts 等具名事件驱动。tool 内部 helper 已经会推
+        charts 等具名事件驱动。tool 内部 helper 已经会推
         content 类事件，这里只补发节点级的 step 容器创建事件。
         """
         try:
@@ -499,12 +499,11 @@ class DeepResearchGraph:
             "replanner": ("replanning", "重规划完成"),
         }
 
-        # UI 状态：前端恢复时需要的研究步骤、搜索结果、图表、知识图谱、流式报告
+        # UI 状态：前端恢复时需要的研究步骤、搜索结果、图表、流式报告
         ui_state = {
             "research_steps": [],
             "search_results": [],
             "charts": [],
-            "knowledge_graph": None,
             "streaming_report": "",
         }
 
@@ -634,12 +633,6 @@ class DeepResearchGraph:
         new_report = state.get("final_report", "")
         if new_report:
             ui_state["streaming_report"] = new_report
-
-        new_kg = state.get("knowledge_graph", {})
-        if new_kg and (new_kg.get("nodes") or new_kg.get("edges")):
-            ui_state["knowledge_graph"] = new_kg
-        elif not ui_state.get("knowledge_graph"):
-            ui_state["knowledge_graph"] = {"nodes": [], "edges": []}
 
         facts = state.get("facts", [])
         if facts:

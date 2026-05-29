@@ -95,10 +95,9 @@ class CheckpointService:
             ui_steps = clean_ui_state.get("research_steps", []) if clean_ui_state else []
             ui_search = clean_ui_state.get("search_results", []) if clean_ui_state else []
             ui_charts = clean_ui_state.get("charts", []) if clean_ui_state else []
-            ui_kg = clean_ui_state.get("knowledge_graph", {}) if clean_ui_state else {}
             logger.info(f"[CheckpointService] 保存成功: session={session_id}, phase={phase}, "
                        f"ui_state=[steps={len(ui_steps)}, search_results={len(ui_search)}, "
-                       f"charts={len(ui_charts)}, kg_nodes={len(ui_kg.get('nodes', []) if ui_kg else [])}]")
+                       f"charts={len(ui_charts)}]")
             return checkpoint_id
 
         except Exception as e:
@@ -162,8 +161,7 @@ class CheckpointService:
                 logger.info(f"[CheckpointService] 加载成功: session={session_id}, phase={result.get('phase')}, "
                            f"ui_state=[steps={len(ui_state.get('research_steps', []))}, "
                            f"search_results={len(ui_state.get('search_results', []))}, "
-                           f"charts={len(ui_state.get('charts', []))}, "
-                           f"kg_nodes={len((ui_state.get('knowledge_graph') or {}).get('nodes', []))}]")
+                           f"charts={len(ui_state.get('charts', []))}]")
             else:
                 logger.info(f"[CheckpointService] 加载成功但无ui_state: session={session_id}, phase={result.get('phase')}")
             return result

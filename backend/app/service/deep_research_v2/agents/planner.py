@@ -21,7 +21,7 @@ PLANNER_PROMPT = """你是一位行业研究的总规划师。给定一个研究
 ## 可用 tool
 
 - `search_section`: 对单个章节执行搜索（按 section_id + queries 调用，可并行）
-- `analyze_facts`: 从所有 facts 提取 data_points + 知识图谱（串行，依赖所有 search 完成）
+- `analyze_facts`: 从所有 facts 提取 data_points + insights（串行，依赖所有 search 完成）
 - `generate_charts`: 根据 data_points 生成图表（串行，依赖 analyze_facts）
 - `write_section`: 撰写单个章节（按 section_id 调用，可并行，依赖 analyze_facts + generate_charts）
 

@@ -166,7 +166,6 @@ class ResearchState(TypedDict):
     key_entities: List[str]                 # 关键实体
     research_questions: List[str]           # 待研究的子问题
     hypotheses: List[Dict[str, Any]]        # 研究假设（假设驱动研究）
-    knowledge_graph: Dict[str, Any]         # 知识图谱 {nodes: [], edges: []}
 
     # 知识库
     facts: List[Dict[str, Any]]             # 结构化事实库
@@ -228,7 +227,6 @@ def create_initial_state(
         key_entities=[],
         research_questions=[],
         hypotheses=[],  # 假设驱动研究
-        knowledge_graph={"nodes": [], "edges": []},  # 知识图谱
         facts=[],
         data_points=[],
         raw_sources=[],
