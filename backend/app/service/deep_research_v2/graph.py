@@ -609,12 +609,9 @@ class DeepResearchGraph:
         # 这里 updates 流是"节点完成"的回报，用于检查点+完成统计。
         # v3 Plan-and-Execute 4 个主 node。executor 内部完成 search/analyze/charts/write，
         # 因此 executor 完成事件 phase 选 "executing"（前端把它映射成研究中状态）。
+        # 路由节点（意图识别、轻量回答）不发 phase 事件，避免前端显示多余状态条
+        SILENT_NODES = {"intent_router", "research_type_router", "web_search", "simple_qa", "out_of_scope"}
         node_to_phase_info = {
-            "intent_router": ("intent", "意图识别完成"),
-            "research_type_router": ("research_type", "研究类型识别完成"),
-            "web_search": ("web_search", "网络搜索完成"),
-            "simple_qa": ("simple_qa", "问答完成"),
-            "out_of_scope": ("out_of_scope", "已处理"),
             "planner": ("planning", "规划完成"),
             "executor": ("executing", "执行批次完成"),
             "critic": ("reviewing", "审核完成"),
@@ -659,16 +656,16 @@ class DeepResearchGraph:
                         # 合并 diff 到 last_state 以便检查点保存看到完整状态
                         last_state.update(node_diff)
 
-                        phase_key, phase_msg = node_to_phase_info.get(
-                            node_name, (node_name, f"{node_name} 完成")
-                        )
-
-                        # 发 phase 事件
-                        yield {
-                            "type": "phase",
-                            "phase": phase_key,
-                            "content": phase_msg,
-                        }
+                        # 路由节点静默，只有研究主链路节点发 phase 事件
+                        if node_name not in SILENT_NODES:
+                            phase_key, phase_msg = node_to_phase_info.get(
+                                node_name, (node_name, f"{node_name} 完成")
+                            )
+                            yield {
+                                "type": "phase",
+                                "phase": phase_key,
+                                "content": phase_msg,
+                            }
 
                         # 触发检查点保存（落 PG，含完整后端状态 + UI 状态）
                         cp_event = self._build_checkpoint_event(

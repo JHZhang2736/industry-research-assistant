@@ -307,6 +307,8 @@ export default function Index() {
           if (json.type === 'intent_detected') {
             if (json.intent !== 'deep_research') {
               target.type = ChatType.Normal
+              target.reactMode = false
+              target.reactSteps = []  // 清除 research_start 添加的"开始深度研究"条目
             }
             return
           }

@@ -7,6 +7,12 @@ from typing import Literal, Optional
 
 from openai import AsyncOpenAI
 
+try:
+    from langsmith.wrappers import wrap_openai
+except ImportError:
+    def wrap_openai(client):
+        return client
+
 logger = logging.getLogger(__name__)
 
 INTENT_TOOLS = [
@@ -87,13 +93,13 @@ class IntentService:
         model: str = "qwen-turbo",
     ):
         self.model = model
-        self.client = AsyncOpenAI(
+        self.client = wrap_openai(AsyncOpenAI(
             api_key=api_key or os.getenv("DASHSCOPE_API_KEY", ""),
             base_url=base_url or os.getenv(
                 "LLM_BASE_URL",
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
             ),
-        )
+        ))
 
     async def classify(self, query: str) -> IntentResult:
         """用 function calling 识别用户查询意图，失败时 fallback 到 deep_research。"""

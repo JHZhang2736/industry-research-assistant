@@ -6,6 +6,12 @@ from typing import Literal, Optional
 
 from openai import AsyncOpenAI
 
+try:
+    from langsmith.wrappers import wrap_openai
+except ImportError:
+    def wrap_openai(client):
+        return client
+
 logger = logging.getLogger(__name__)
 
 RESEARCH_TYPE_TOOLS = [
@@ -66,13 +72,13 @@ class ResearchTypeService:
         model: str = "qwen-turbo",
     ):
         self.model = model
-        self.client = AsyncOpenAI(
+        self.client = wrap_openai(AsyncOpenAI(
             api_key=api_key or os.getenv("DASHSCOPE_API_KEY", ""),
             base_url=base_url or os.getenv(
                 "LLM_BASE_URL",
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
             ),
-        )
+        ))
 
     async def classify(self, query: str) -> ResearchTypeResult:
         """识别深度研究的具体类型，失败时 fallback 到 industry_analysis。"""

@@ -54,9 +54,14 @@ class ResearchRequest(BaseModel):
         return self.search_local if self.search_local is not None else False
 
 
-def get_research_service_v2():
-    """获取 V2 研究服务实例（使用配置文件中的模型设置）"""
-    return DeepResearchV2Service()
+_research_service_v2: DeepResearchV2Service = None
+
+def get_research_service_v2() -> DeepResearchV2Service:
+    """获取 V2 研究服务实例（单例，避免每次请求重建所有 agent 客户端）"""
+    global _research_service_v2
+    if _research_service_v2 is None:
+        _research_service_v2 = DeepResearchV2Service()
+    return _research_service_v2
 
 @router.post("/stream", status_code=HTTP_200_OK)
 async def stream_research(request: ResearchRequest):
