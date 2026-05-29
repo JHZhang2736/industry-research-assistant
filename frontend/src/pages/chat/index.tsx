@@ -225,7 +225,9 @@ export default function Index() {
       target.loading = true
       try {
         let res
-        if (target.type === ChatType.Deepsearch) {
+        // API 选择依赖 searchModes（用户主动选择的模式），而非 target.type
+        // target.type 初始为 Normal，intent_detected 后才切换，不能用于路由判断
+        if ((deviceState.searchModes as string[]).length > 0) {
           res = await api.session.deepsearch({
             query: message,
             session_id: id,  // 传递会话 ID 用于检查点保存
