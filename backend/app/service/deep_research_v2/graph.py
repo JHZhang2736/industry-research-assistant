@@ -11,6 +11,7 @@ Plan -> Research -> Analyze -> Write -> Review -> (Revise) -> Complete
 
 import logging
 import asyncio
+import uuid
 from typing import Dict, Any, List, Literal, AsyncGenerator, Optional
 from datetime import datetime
 
@@ -77,40 +78,34 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("DeepResearchGraph")
 
 
-def _tag_langsmith_run(*, intent: str = None, research_type: str = None) -> None:
-    """把意图/研究类型写到当前 LangSmith run 的父 run（图级别）上。
+def _update_root_run_tags(root_run_id, base_tags, intent=None, research_type=None) -> None:
+    """图执行完成后，用 LangSmith Client 给根 run 补写 intent/research_type 标签。
 
-    打到 metadata（可在 LangSmith 里按字段 filter/group）+ tags（列表页快速筛选）。
-    LangSmith 未启用或不在 trace 上下文时静默跳过，不影响主流程。
+    为什么不在节点内 mutate run tree：LangGraph 走 callback 追踪，
+    get_current_run_tree() 返回的对象不是 tracer 实际 PATCH 的对象，mutate 不持久化。
+    可靠做法是预生成根 run_id（写进 config），图跑完后用已知 id 直接 update_run。
+    此时 tracer 的最终 PATCH 已完成，我们的 update 是最后一次写入，必然生效。
 
-    注意：当前带 DEBUG 诊断日志，用于确认 get_current_run_tree() 在 LangGraph
-    callback 追踪上下文里是否返回真实 run。验证完成后可降级为静默。
+    tags 是覆盖式更新，需带上 base_tags（trace_config 里的原始标签）一并写回。
+    LangSmith 未启用时静默跳过。
     """
     try:
-        from langsmith.run_helpers import get_current_run_tree
-        run = get_current_run_tree()
-        if run is None:
-            logger.warning("[langsmith-tag] get_current_run_tree() 返回 None，标签未写入")
-            return
-        # 找到根 run（图级别），把标签打在它上面，便于整条 trace 聚合
-        root = run
-        depth = 0
-        while getattr(root, "parent_run", None) is not None:
-            root = root.parent_run
-            depth += 1
+        from langsmith import Client
+    except ImportError:
+        return
+    try:
+        tags = list(base_tags)
+        metadata = {}
         if intent is not None:
-            root.metadata["intent"] = intent
-            root.tags = list(set((root.tags or []) + [f"intent:{intent}"]))
-        if research_type is not None:
-            root.metadata["research_type"] = research_type
-            root.tags = list(set((root.tags or []) + [f"research_type:{research_type}"]))
-        logger.info(
-            f"[langsmith-tag] 已写入 root run (name={getattr(root, 'name', '?')}, "
-            f"id={getattr(root, 'id', '?')}, parent_depth={depth}) "
-            f"intent={intent} research_type={research_type} tags={root.tags}"
-        )
+            tags.append(f"intent:{intent}")
+            metadata["intent"] = intent
+        if research_type:
+            tags.append(f"research_type:{research_type}")
+            metadata["research_type"] = research_type
+        Client().update_run(root_run_id, tags=tags, extra={"metadata": metadata})
+        logger.info(f"[langsmith-tag] 根 run {root_run_id} 已补写 intent={intent} research_type={research_type}")
     except Exception as e:
-        logger.warning(f"[langsmith-tag] 写入失败: {e!r}")
+        logger.warning(f"[langsmith-tag] update_run 失败（不影响主流程）: {e!r}")
 
 
 # ============================================================================
@@ -416,9 +411,6 @@ class DeepResearchGraph:
 
         logger.info(f"Intent detected: {result.intent} (confidence={result.confidence:.2f}) for: {query[:50]}")
 
-        # 把意图写入 LangSmith trace 的 metadata/tags，便于按意图分组统计延迟/token
-        _tag_langsmith_run(intent=result.intent)
-
         try:
             from langgraph.config import get_stream_writer
             writer = get_stream_writer()
@@ -444,9 +436,6 @@ class DeepResearchGraph:
             f"Research type detected: {result.research_type} "
             f"(confidence={result.confidence:.2f}) for: {query[:50]}"
         )
-
-        # 把研究类型写入 LangSmith trace，便于细分统计
-        _tag_langsmith_run(research_type=result.research_type)
 
         try:
             from langgraph.config import get_stream_writer
@@ -690,10 +679,14 @@ class DeepResearchGraph:
         query = state.get("query", "")
         # run_name 用于 LangSmith run 列表展示，去掉换行避免标签里出现字面 \n
         run_label = query[:40].replace("\n", " ").strip() if query else ""
+        # 预生成根 run_id：图跑完后用它给根 run 补写 intent/research_type 标签（可靠跨 trace 聚合）
+        root_run_id = uuid.uuid4()
+        base_tags = ["deep_research_v3"] + ([session_id] if session_id else [])
         trace_config = {
+            "run_id": root_run_id,
             "run_name": f"research: {run_label}" if run_label else "research",
             "metadata": {"session_id": session_id, "query": query},
-            "tags": ["deep_research_v3"] + ([session_id] if session_id else []),
+            "tags": base_tags,
         }
 
         try:
@@ -757,6 +750,12 @@ class DeepResearchGraph:
                     logger.debug(f"update_status(failed) failed (non-fatal): {e}")
             yield {"type": "error", "content": str(e)}
             return
+
+        # 图跑完，给根 run 补写意图/研究类型标签（用于 LangSmith 跨 trace 按意图聚合）
+        # research_type 仅在 deep_research 路径有意义（其余路径 research_type_router 未执行，保持默认值）
+        final_intent = last_state.get("intent")
+        final_rtype = last_state.get("research_type") if final_intent == "deep_research" else None
+        _update_root_run_tags(root_run_id, base_tags, intent=final_intent, research_type=final_rtype)
 
         # 完成事件：发给前端展示研究结果摘要（final_report、quality_score、统计、references）
         if self.checkpoint_service and session_id:
