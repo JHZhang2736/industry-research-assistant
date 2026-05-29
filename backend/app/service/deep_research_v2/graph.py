@@ -30,6 +30,14 @@ except (ImportError, SyntaxError):
 from langgraph.graph import StateGraph, END
 
 from .state import ResearchState, ResearchPhase, create_initial_state
+
+try:
+    from service.intent_service import IntentService
+    from service.intent_handlers import web_search_node, simple_qa_node, out_of_scope_node
+except ImportError:
+    from app.service.intent_service import IntentService
+    from app.service.intent_handlers import web_search_node, simple_qa_node, out_of_scope_node
+
 from .agents import (
     DeepScout, CodeWizard, CriticMaster, LeadWriter, DataAnalyst,
     Planner, Replanner,
@@ -70,6 +78,18 @@ logger = logging.getLogger("DeepResearchGraph")
 
 MAX_REPLAN = 3
 QUALITY_PASS_THRESHOLD = 7.0  # critic 给分 < 该值即视为"未通过"，需 replan
+
+
+def route_after_intent(state: ResearchState) -> str:
+    """intent_router 节点后的条件路由。"""
+    intent = state.get("intent", "deep_research")
+    if intent == "web_search":
+        return "web_search"
+    if intent == "simple_qa":
+        return "simple_qa"
+    if intent == "out_of_scope":
+        return "out_of_scope"
+    return "planner"
 
 
 def route_after_critic(state: ResearchState) -> str:
@@ -190,6 +210,13 @@ class DeepResearchGraph:
         # 检查点服务
         self.checkpoint_service = get_checkpoint_service()
 
+        # 意图识别服务
+        self.intent_service = IntentService(
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=config.intent_model,
+        )
+
         # 构建图
         self.graph = self._build_langgraph()
 
@@ -245,50 +272,99 @@ class DeepResearchGraph:
         return self.checkpoint_service.get_checkpoint_info(session_id)
 
     def _build_langgraph(self):
-        """构建 v3 Plan-and-Execute 主图
+        """构建 v3 Plan-and-Execute 主图（含意图路由入口）
 
         拓扑：
 
-            planner → executor → critic
-                                   ├── pass → END
-                                   └── needs_revision → replanner
-                                                          ├── max_replan → END
-                                                          ├── (TODO) fallback
-                                                          └── default → executor
+            intent_router
+              ├── web_search   → END
+              ├── simple_qa    → END
+              ├── out_of_scope → END
+              └── planner → executor → critic
+                                         ├── pass → END
+                                         └── needs_revision → replanner
+                                                                ├── max_replan → END
+                                                                └── default → executor
         """
         workflow = StateGraph(ResearchState)
 
-        # 4 个主 node
+        # 意图路由入口
+        workflow.add_node("intent_router", self._intent_router_node)
+
+        # 轻量路径节点
+        workflow.add_node("web_search", web_search_node)
+        workflow.add_node("simple_qa", simple_qa_node)
+        workflow.add_node("out_of_scope", out_of_scope_node)
+
+        # 深度研究路径节点（原有）
         workflow.add_node("planner", self._planner_node)
         workflow.add_node("executor", executor_node)
         workflow.add_node("critic", self._critic_node)
         workflow.add_node("replanner", self._replanner_node)
 
-        workflow.set_entry_point("planner")
+        # 入口改为 intent_router
+        workflow.set_entry_point("intent_router")
 
-        # 顺序边
+        # intent_router 条件分流
+        workflow.add_conditional_edges(
+            "intent_router",
+            route_after_intent,
+            {
+                "web_search": "web_search",
+                "simple_qa": "simple_qa",
+                "out_of_scope": "out_of_scope",
+                "planner": "planner",
+            },
+        )
+
+        # 轻量路径直接结束
+        workflow.add_edge("web_search", END)
+        workflow.add_edge("simple_qa", END)
+        workflow.add_edge("out_of_scope", END)
+
+        # 深度研究路径（原有逻辑不变）
         workflow.add_edge("planner", "executor")
         workflow.add_edge("executor", "critic")
 
-        # critic 之后的条件路由
         workflow.add_conditional_edges(
             "critic",
             route_after_critic,
             {"END": END, "replanner": "replanner"},
         )
 
-        # replanner 之后的条件路由
         workflow.add_conditional_edges(
             "replanner",
             route_after_replanner,
             {
                 "END": END,
                 "executor": "executor",
-                # TODO(phase-2): "supervisor_fallback": "supervisor_fallback"
             },
         )
 
         return workflow.compile()
+
+    async def _intent_router_node(self, state: ResearchState) -> Dict[str, Any]:
+        """意图识别入口节点：function calling 分类，写入 intent/research_type，推 SSE 事件。"""
+        self._maybe_cancel(state)
+
+        query = state.get("query", "")
+        result = await self.intent_service.classify(query)
+
+        logger.info(f"Intent detected: {result.intent} (confidence={result.confidence:.2f}) for: {query[:50]}")
+
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({
+                "type": "intent_detected",
+                "intent": result.intent,
+                "research_type": result.research_type,
+                "confidence": result.confidence,
+            })
+        except (ImportError, RuntimeError, KeyError):
+            pass
+
+        return {"intent": result.intent, "research_type": result.research_type}
 
     def _maybe_cancel(self, state: ResearchState) -> None:
         """在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。"""
@@ -493,6 +569,10 @@ class DeepResearchGraph:
         # v3 Plan-and-Execute 4 个主 node。executor 内部完成 search/analyze/charts/write，
         # 因此 executor 完成事件 phase 选 "executing"（前端把它映射成研究中状态）。
         node_to_phase_info = {
+            "intent_router": ("intent", "意图识别完成"),
+            "web_search": ("web_search", "网络搜索完成"),
+            "simple_qa": ("simple_qa", "问答完成"),
+            "out_of_scope": ("out_of_scope", "已处理"),
             "planner": ("planning", "规划完成"),
             "executor": ("executing", "执行批次完成"),
             "critic": ("reviewing", "审核完成"),
