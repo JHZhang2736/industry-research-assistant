@@ -305,7 +305,8 @@ export default function Index() {
           // 意图识别事件：在 Deepsearch/Normal 分支判断前处理
           if (json.type === 'intent_detected') {
             if (json.intent === 'deep_research') {
-              // 确认是深度研究后才初始化 panel，避免非研究路径出现闪烁
+              // 确认是深度研究后才切换类型并初始化面板，彻底消除闪烁
+              target.type = ChatType.Deepsearch
               target.reactMode = true
               if (!target.reactSteps) target.reactSteps = []
               target.reactSteps.push({
@@ -315,7 +316,6 @@ export default function Index() {
                 timestamp: Date.now(),
               })
             } else {
-              // 切回普通聊天模式
               target.type = ChatType.Normal
               target.reactMode = false
               target.reactSteps = []
@@ -1091,7 +1091,7 @@ export default function Index() {
       chat.list.push({
         id: createChatId(),
         role: ChatRole.Assistant,
-        type: (deviceState.searchModes as string[]).length > 0 ? ChatType.Deepsearch : ChatType.Normal,
+        type: ChatType.Normal,  // 统一先 Normal，intent_detected 确认 deep_research 后再切换
         content: '',
       })
       scrollToBottom()

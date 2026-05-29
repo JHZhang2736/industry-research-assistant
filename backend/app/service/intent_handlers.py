@@ -10,6 +10,12 @@ from typing import Dict, Any
 
 from openai import AsyncOpenAI
 
+try:
+    from langsmith.wrappers import wrap_openai
+except ImportError:
+    def wrap_openai(client):
+        return client
+
 logger = logging.getLogger(__name__)
 
 # ── 内部辅助 ──────────────────────────────────────────────────────────────────
@@ -29,13 +35,13 @@ def _emit(writer, event: Dict[str, Any]) -> None:
 
 
 def _make_llm_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
+    return wrap_openai(AsyncOpenAI(
         api_key=os.getenv("DASHSCOPE_API_KEY", ""),
         base_url=os.getenv(
             "LLM_BASE_URL",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
-    )
+    ))
 
 
 # ── LangGraph 节点函数 ────────────────────────────────────────────────────────
