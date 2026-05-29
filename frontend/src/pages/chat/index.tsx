@@ -301,6 +301,20 @@ export default function Index() {
           }
 
           const json = JSON.parse(str)
+
+          // 意图识别事件：在 Deepsearch/Normal 分支判断前处理
+          // intent !== 'deep_research' 时切回 Normal 模式，后续 answer_chunk 由 else 分支处理
+          if (json.type === 'intent_detected') {
+            if (json.intent !== 'deep_research') {
+              target.type = ChatType.Normal
+            }
+            return
+          }
+          // research_type_detected 和 done 对前端 UI 无需额外操作
+          if (json.type === 'research_type_detected' || json.type === 'done') {
+            return
+          }
+
           if (target.type === ChatType.Deepsearch) {
             // 辅助函数：从 V2 格式中提取实际内容
             const extractContent = (data: any): string => {
