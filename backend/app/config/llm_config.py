@@ -122,6 +122,9 @@ class LLMConfig:
     # 默认模型（用于未单独配置的场景）
     default_model: str = "deepseek-v3.2"
 
+    # 意图识别模型（轻量快速）
+    intent_model: str = "qwen-turbo"
+
     # Agent 配置
     agents: AgentsConfig = field(default_factory=AgentsConfig)
 
