@@ -303,12 +303,22 @@ export default function Index() {
           const json = JSON.parse(str)
 
           // 意图识别事件：在 Deepsearch/Normal 分支判断前处理
-          // intent !== 'deep_research' 时切回 Normal 模式，后续 answer_chunk 由 else 分支处理
           if (json.type === 'intent_detected') {
-            if (json.intent !== 'deep_research') {
+            if (json.intent === 'deep_research') {
+              // 确认是深度研究后才初始化 panel，避免非研究路径出现闪烁
+              target.reactMode = true
+              if (!target.reactSteps) target.reactSteps = []
+              target.reactSteps.push({
+                step: 0,
+                type: 'plan',
+                content: `🔬 开始深度研究`,
+                timestamp: Date.now(),
+              })
+            } else {
+              // 切回普通聊天模式
               target.type = ChatType.Normal
               target.reactMode = false
-              target.reactSteps = []  // 清除 research_start 添加的"开始深度研究"条目
+              target.reactSteps = []
             }
             return
           }
@@ -330,20 +340,8 @@ export default function Index() {
               return String(data || '')
             }
 
-            // V2 研究开始事件
+            // V2 研究开始事件：只重置状态，panel 初始化延迟到 intent_detected 确认后
             if (json.type === 'research_start') {
-              target.reactMode = true
-              if (!target.reactSteps) {
-                target.reactSteps = []
-              }
-              target.reactSteps.push({
-                step: 0,
-                type: 'plan',
-                content: `🔬 开始深度研究: ${json.query || ''}`,
-                timestamp: Date.now(),
-              })
-              // 重置研究步骤
-              console.log(`[前端] ⚠️ research_start: 清空 researchDetailsRef`)
               setResearchSteps([])
               researchDetailsRef.current.clear()
               setSelectedResearchDetail(null)

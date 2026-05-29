@@ -36,6 +36,10 @@ Base.metadata.create_all(bind=engine)
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info("应用启动中...")
+    # 预热 DeepResearchV2Service 单例，避免首次请求初始化延迟
+    from router.research_router import get_research_service_v2
+    get_research_service_v2()
+    logger.info("DeepResearchV2Service 预热完成")
     yield
     logger.info("应用关闭中...")
 
