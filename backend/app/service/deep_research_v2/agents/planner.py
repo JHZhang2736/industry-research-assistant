@@ -5,12 +5,41 @@
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Dict, Any
+import yaml
 
 from .base import BaseAgent
 from ..state import ResearchState
 
 logger = logging.getLogger("deep_research_v3.planner")
+
+
+def _load_research_skill(research_type: str) -> dict:
+    """加载 research_skills/{research_type}.yaml，文件不存在或格式错误时返回空配置。"""
+    if not research_type or research_type == "general":
+        return {}
+    skill_path = Path(__file__).parent.parent.parent.parent / "research_skills" / f"{research_type}.yaml"
+    try:
+        if skill_path.exists():
+            return yaml.safe_load(skill_path.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        logger.warning(f"Failed to load research skill '{research_type}': {e}")
+    return {}
+
+
+def _format_outline_hint(outline_template: list) -> str:
+    """将 outline_template 格式化为 Planner user prompt 中的参考文本。"""
+    if not outline_template:
+        return ""
+    lines = ["参考章节框架（请以此为基础生成 outline，可根据具体问题适当调整）："]
+    for i, section in enumerate(outline_template, 1):
+        title = section.get("title", "")
+        hints = section.get("search_query_hints", [])
+        lines.append(f"{i}. {title}")
+        if hints:
+            lines.append(f"   搜索词示例：{', '.join(hints[:2])}")
+    return "\n".join(lines)
 
 
 PLANNER_PROMPT = """你是一位行业研究的总规划师。给定一个研究问题，你需要：
@@ -120,9 +149,28 @@ class Planner(BaseAgent):
         self.add_message(state, "phase", "📋 规划阶段：生成 outline + 执行 plan...")
 
         try:
+            # 加载研究类型技能配置
+            research_type = state.get("research_type", "")
+            skill = _load_research_skill(research_type)
+            skill_prompt = skill.get("planner_prompt", "")
+            outline_hint = _format_outline_hint(skill.get("outline_template", []))
+
+            # 构建 system prompt：技能 prompt 前置，提供具体研究框架
+            base_system_prompt = PLANNER_PROMPT.replace("{query}", query)
+            system_prompt = (
+                skill_prompt.strip() + "\n\n" + base_system_prompt
+                if skill_prompt
+                else base_system_prompt
+            )
+
+            # 构建 user prompt：追加大纲参考
+            user_prompt = f"研究问题：{query}"
+            if outline_hint:
+                user_prompt += f"\n\n{outline_hint}"
+
             response = await self.call_llm(
-                system_prompt=PLANNER_PROMPT.replace("{query}", query),
-                user_prompt=f"研究问题：{query}",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
                 json_mode=True,
                 temperature=0.3,
                 state=state,

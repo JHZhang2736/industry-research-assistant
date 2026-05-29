@@ -21,7 +21,7 @@ outline_template:
       - "{topic} 商业模式 业务介绍"
       - "{topic} 收入构成 主营业务"
       - "{topic} 公司简介 发展历程"
-  - title: 财务状况分析
+  - title: 财务分析
     search_query_hints:
       - "{topic} 财报 营收 利润 {year}"
       - "{topic} 毛利率 净利率 ROE"
