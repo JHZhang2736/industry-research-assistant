@@ -77,6 +77,8 @@ async def test_classify_simple_qa(service):
         result = await service.classify("什么是市盈率PE")
 
     assert result.intent == "simple_qa"
+    assert result.research_type == ""
+    assert result.confidence == 1.0
 
 
 @pytest.mark.asyncio
@@ -96,3 +98,5 @@ async def test_classify_out_of_scope(service):
         result = await service.classify("帮我写首诗")
 
     assert result.intent == "out_of_scope"
+    assert result.research_type == ""
+    assert result.confidence == 1.0
