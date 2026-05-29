@@ -38,6 +38,11 @@ except ImportError:
     from app.service.intent_service import IntentService
     from app.service.intent_handlers import web_search_node, simple_qa_node, out_of_scope_node
 
+try:
+    from service.research_type_service import ResearchTypeService
+except ImportError:
+    from app.service.research_type_service import ResearchTypeService
+
 from .agents import (
     DeepScout, CodeWizard, CriticMaster, LeadWriter, DataAnalyst,
     Planner, Replanner,
@@ -89,7 +94,7 @@ def route_after_intent(state: ResearchState) -> str:
         return "simple_qa"
     if intent == "out_of_scope":
         return "out_of_scope"
-    return "planner"
+    return "research_type_router"
 
 
 def route_after_critic(state: ResearchState) -> str:
@@ -217,6 +222,13 @@ class DeepResearchGraph:
             model=config.intent_model,
         )
 
+        # 研究类型识别服务（Level 2）
+        self.research_type_service = ResearchTypeService(
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=config.intent_model,
+        )
+
         # 构建图
         self.graph = self._build_langgraph()
 
@@ -296,6 +308,9 @@ class DeepResearchGraph:
         workflow.add_node("simple_qa", simple_qa_node)
         workflow.add_node("out_of_scope", out_of_scope_node)
 
+        # Level 2 研究类型路由节点
+        workflow.add_node("research_type_router", self._research_type_router_node)
+
         # 深度研究路径节点（原有）
         workflow.add_node("planner", self._planner_node)
         workflow.add_node("executor", executor_node)
@@ -313,7 +328,7 @@ class DeepResearchGraph:
                 "web_search": "web_search",
                 "simple_qa": "simple_qa",
                 "out_of_scope": "out_of_scope",
-                "planner": "planner",
+                "research_type_router": "research_type_router",
             },
         )
 
@@ -321,6 +336,7 @@ class DeepResearchGraph:
         workflow.add_edge("web_search", END)
         workflow.add_edge("simple_qa", END)
         workflow.add_edge("out_of_scope", END)
+        workflow.add_edge("research_type_router", "planner")
 
         # 深度研究路径（原有逻辑不变）
         workflow.add_edge("planner", "executor")
@@ -365,6 +381,31 @@ class DeepResearchGraph:
             pass
 
         return {"intent": result.intent, "research_type": result.research_type}
+
+    async def _research_type_router_node(self, state: ResearchState) -> Dict[str, Any]:
+        """研究类型识别节点（Level 2）：仅在 deep_research 路径触发。"""
+        self._maybe_cancel(state)
+
+        query = state.get("query", "")
+        result = await self.research_type_service.classify(query)
+
+        logger.info(
+            f"Research type detected: {result.research_type} "
+            f"(confidence={result.confidence:.2f}) for: {query[:50]}"
+        )
+
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({
+                "type": "research_type_detected",
+                "research_type": result.research_type,
+                "confidence": result.confidence,
+            })
+        except (ImportError, RuntimeError, KeyError):
+            pass
+
+        return {"research_type": result.research_type}
 
     def _maybe_cancel(self, state: ResearchState) -> None:
         """在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。"""
@@ -570,6 +611,7 @@ class DeepResearchGraph:
         # 因此 executor 完成事件 phase 选 "executing"（前端把它映射成研究中状态）。
         node_to_phase_info = {
             "intent_router": ("intent", "意图识别完成"),
+            "research_type_router": ("research_type", "研究类型识别完成"),
             "web_search": ("web_search", "网络搜索完成"),
             "simple_qa": ("simple_qa", "问答完成"),
             "out_of_scope": ("out_of_scope", "已处理"),
