@@ -77,6 +77,32 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("DeepResearchGraph")
 
 
+def _tag_langsmith_run(*, intent: str = None, research_type: str = None) -> None:
+    """把意图/研究类型写到当前 LangSmith run 的父 run（图级别）上。
+
+    打到 metadata（可在 LangSmith 里按字段 filter/group）+ tags（列表页快速筛选）。
+    LangSmith 未启用或不在 trace 上下文时静默跳过，不影响主流程。
+    """
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+        run = get_current_run_tree()
+        if run is None:
+            return
+        # 找到根 run（图级别），把标签打在它上面，便于整条 trace 聚合
+        root = run
+        while getattr(root, "parent_run", None) is not None:
+            root = root.parent_run
+        if intent is not None:
+            root.metadata["intent"] = intent
+            root.tags = list(set((root.tags or []) + [f"intent:{intent}"]))
+        if research_type is not None:
+            root.metadata["research_type"] = research_type
+            root.tags = list(set((root.tags or []) + [f"research_type:{research_type}"]))
+    except Exception:
+        # LangSmith 未安装/未启用/API 变动等，均不影响主流程
+        pass
+
+
 # ============================================================================
 # 模块级路由函数（v3 Plan-and-Execute）
 # ============================================================================
@@ -368,6 +394,9 @@ class DeepResearchGraph:
 
         logger.info(f"Intent detected: {result.intent} (confidence={result.confidence:.2f}) for: {query[:50]}")
 
+        # 把意图写入 LangSmith trace 的 metadata/tags，便于按意图分组统计延迟/token
+        _tag_langsmith_run(intent=result.intent)
+
         try:
             from langgraph.config import get_stream_writer
             writer = get_stream_writer()
@@ -393,6 +422,9 @@ class DeepResearchGraph:
             f"Research type detected: {result.research_type} "
             f"(confidence={result.confidence:.2f}) for: {query[:50]}"
         )
+
+        # 把研究类型写入 LangSmith trace，便于细分统计
+        _tag_langsmith_run(research_type=result.research_type)
 
         try:
             from langgraph.config import get_stream_writer
