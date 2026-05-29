@@ -21,16 +21,10 @@ export interface ChartData {
   image_base64?: string
 }
 
-export interface KnowledgeGraphData {
-  nodes: Array<{ id: string; name: string; type: string }>
-  edges: Array<{ source: string; target: string; relation: string }>
-}
-
 interface ProcessReportProps {
   content?: string  // 最终报告
   sections?: SectionDraft[]  // 章节草稿
   charts?: ChartData[]  // 图表数据
-  knowledgeGraph?: KnowledgeGraphData  // 知识图谱
 }
 
 // 渲染单个图表
@@ -99,7 +93,6 @@ function findMatchingChart(altText: string, charts: ChartData[]): ChartData | nu
 type ContentBlock =
   | { type: 'markdown'; content: string }
   | { type: 'chart'; chart: ChartData }
-  | { type: 'knowledgeGraph'; data: KnowledgeGraphData }
 
 // 查找图表最匹配的章节标题
 function findBestSectionForChart(chartTitle: string, sectionTitles: string[]): number {
@@ -133,8 +126,7 @@ function findBestSectionForChart(chartTitle: string, sectionTitles: string[]): n
 // 解析内容，将图片占位符替换为图表
 function parseContentWithCharts(
   content: string,
-  charts: ChartData[],
-  knowledgeGraph?: KnowledgeGraphData
+  charts: ChartData[]
 ): ContentBlock[] {
   const blocks: ContentBlock[] = []
   const usedCharts = new Set<string>()
@@ -145,8 +137,6 @@ function parseContentWithCharts(
 
   let lastIndex = 0
   let match
-  let graphInserted = false
-  let firstH2Passed = false
 
   while ((match = imageRegex.exec(content)) !== null) {
     const altText = match[1]
@@ -157,16 +147,6 @@ function parseContentWithCharts(
       const textBefore = content.slice(lastIndex, matchIndex)
       if (textBefore.trim()) {
         blocks.push({ type: 'markdown', content: textBefore })
-      }
-
-      // 在第一个章节后插入知识图谱（如果有）
-      if (!graphInserted && knowledgeGraph && knowledgeGraph.nodes.length > 0) {
-        const h2Count = (textBefore.match(/^## /gm) || []).length
-        if (h2Count >= 1) {
-          blocks.push({ type: 'knowledgeGraph', data: knowledgeGraph })
-          graphInserted = true
-          firstH2Passed = true
-        }
       }
     }
 
@@ -235,50 +215,6 @@ function parseContentWithCharts(
     }
   }
 
-  // 第三步：处理知识图谱 - 在执行摘要后或第一个主要章节后插入
-  if (!graphInserted && knowledgeGraph && knowledgeGraph.nodes.length > 0 && blocks.length > 0) {
-    let insertAfterIdx = -1
-
-    // 优先查找"执行摘要"或"摘要"章节之后
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i]
-      if (block.type === 'markdown') {
-        if (/^##\s*(执行摘要|摘要|概述|研究背景)/m.test(block.content)) {
-          insertAfterIdx = i
-          break
-        }
-      }
-    }
-
-    // 如果没找到摘要，找第一个编号章节（如 "## 1 xxx"）
-    if (insertAfterIdx === -1) {
-      for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i]
-        if (block.type === 'markdown' && /^##\s+\d+/m.test(block.content)) {
-          insertAfterIdx = i
-          break
-        }
-      }
-    }
-
-    // 还没找到就用第一个 h2
-    if (insertAfterIdx === -1) {
-      for (let i = 0; i < blocks.length; i++) {
-        const block = blocks[i]
-        if (block.type === 'markdown' && /^## /m.test(block.content)) {
-          insertAfterIdx = i
-          break
-        }
-      }
-    }
-
-    // 插入知识图谱
-    if (insertAfterIdx >= 0) {
-      blocks.splice(insertAfterIdx + 1, 0, { type: 'knowledgeGraph', data: knowledgeGraph })
-      graphInserted = true
-    }
-  }
-
   // 第四步：处理仍未使用的图表 - 均匀分布到各章节中，而不是全部放到末尾
   unusedCharts = charts.filter(c => !usedCharts.has(c.id))
   if (unusedCharts.length > 0) {
@@ -327,52 +263,7 @@ function parseContentWithCharts(
   return blocks
 }
 
-// 简化的知识图谱组件（内联显示）
-function InlineKnowledgeGraph({ data }: { data: KnowledgeGraphData }) {
-  if (!data || !data.nodes || data.nodes.length === 0) return null
-
-  // 按类型分组节点
-  const nodesByType: Record<string, string[]> = {}
-  data.nodes.forEach(node => {
-    const type = node.type || 'other'
-    if (!nodesByType[type]) nodesByType[type] = []
-    nodesByType[type].push(node.name)
-  })
-
-  const typeLabels: Record<string, string> = {
-    core: '核心概念',
-    tech: '技术/方法',
-    company: '企业/机构',
-    policy: '政策/法规',
-    product: '产品/服务',
-    person: '人物',
-    other: '其他',
-  }
-
-  return (
-    <div className={styles.inlineGraph}>
-      <div className={styles.graphTitle}>🔗 知识图谱</div>
-      <div className={styles.graphContent}>
-        {Object.entries(nodesByType).map(([type, names]) => (
-          <div key={type} className={styles.graphCategory}>
-            <span className={styles.categoryLabel}>{typeLabels[type] || type}:</span>
-            <span className={styles.categoryItems}>
-              {names.slice(0, 8).join('、')}
-              {names.length > 8 && ` 等${names.length}项`}
-            </span>
-          </div>
-        ))}
-        {data.edges && data.edges.length > 0 && (
-          <div className={styles.graphStats}>
-            共 {data.nodes.length} 个实体，{data.edges.length} 个关系
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-export default function ProcessReport({ content, sections, charts, knowledgeGraph }: ProcessReportProps) {
+export default function ProcessReport({ content, sections, charts }: ProcessReportProps) {
   const [activeView, setActiveView] = useState<'sections' | 'final'>('final')
 
   const hasSections = sections && sections.length > 0
@@ -381,8 +272,8 @@ export default function ProcessReport({ content, sections, charts, knowledgeGrap
   // 解析内容块（将图表插入到合适位置）
   const contentBlocks = useMemo(() => {
     if (!content) return []
-    return parseContentWithCharts(content, charts || [], knowledgeGraph)
-  }, [content, charts, knowledgeGraph])
+    return parseContentWithCharts(content, charts || [])
+  }, [content, charts])
 
   if (!hasSections && !hasContent) {
     return (
@@ -446,9 +337,6 @@ export default function ProcessReport({ content, sections, charts, knowledgeGrap
               }
               if (block.type === 'chart') {
                 return <ChartRenderer key={index} chart={block.chart} inline />
-              }
-              if (block.type === 'knowledgeGraph') {
-                return <InlineKnowledgeGraph key={index} data={block.data} />
               }
               return null
             })}

@@ -1,10 +1,9 @@
 
 
-import { FileTextOutlined, ShareAltOutlined, BarChartOutlined, CheckOutlined, LoadingOutlined, FileMarkdownOutlined } from '@ant-design/icons'
+import { FileTextOutlined, BarChartOutlined, CheckOutlined, LoadingOutlined, FileMarkdownOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import classNames from 'classnames'
 import SearchResults from './search-results'
-import KnowledgeGraph from './knowledge-graph'
 import Visualization from './visualization'
 import ProcessReport, { SectionDraft } from './process-report'
 import styles from './index.module.scss'
@@ -16,29 +15,6 @@ export interface SearchResult {
   date?: string
   url?: string
   snippet?: string
-}
-
-export interface GraphNode {
-  id: string
-  name: string
-  type: 'core' | 'tech' | 'company' | 'policy' | 'product' | 'person'
-  size?: number
-  importance?: number
-}
-
-export interface GraphEdge {
-  source: string
-  target: string
-  relation: string
-}
-
-export interface KnowledgeGraphData {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  stats?: {
-    entitiesCount: number
-    relationsCount: number
-  }
 }
 
 export interface ChartConfig {
@@ -56,7 +32,6 @@ export interface ResearchDetailData {
   title: string
   subtitle?: string
   searchResults?: SearchResult[]
-  knowledgeGraph?: KnowledgeGraphData
   charts?: ChartConfig[]
   streamingReport?: string  // 最终报告
   sections?: SectionDraft[]  // 章节草稿
@@ -78,7 +53,7 @@ interface ResearchDetailProps {
   onClose?: () => void
 }
 
-type TabKey = 'results' | 'graph' | 'charts' | 'report'
+type TabKey = 'results' | 'charts' | 'report'
 
 const stepLabels: Record<ResearchStep['type'], string> = {
   planning: '研究计划',
@@ -96,7 +71,7 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
 
   console.log(`[ResearchDetail] 渲染，data=${data ? 'exists' : 'null'}, steps=${steps.length}`)
   if (data) {
-    console.log(`[ResearchDetail] data 详情: searchResults=${data.searchResults?.length || 0}, charts=${data.charts?.length || 0}, hasGraph=${!!data.knowledgeGraph}, hasReport=${!!data.streamingReport}`)
+    console.log(`[ResearchDetail] data 详情: searchResults=${data.searchResults?.length || 0}, charts=${data.charts?.length || 0}, hasReport=${!!data.streamingReport}`)
   }
 
   // 空状态
@@ -123,12 +98,6 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
       label: '搜索结果',
       icon: <FileTextOutlined />,
       count: data?.searchResults?.length,
-    },
-    {
-      key: 'graph',
-      label: '知识图谱',
-      icon: <ShareAltOutlined />,
-      count: data?.knowledgeGraph?.nodes?.length,
     },
     {
       key: 'charts',
@@ -196,9 +165,8 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
       {/* 内容区 */}
       <div className={styles.content}>
         {activeTab === 'results' && <SearchResults data={data?.searchResults} />}
-        {activeTab === 'graph' && <KnowledgeGraph data={data?.knowledgeGraph} />}
         {activeTab === 'charts' && <Visualization charts={data?.charts} />}
-        {activeTab === 'report' && <ProcessReport content={data?.streamingReport} sections={data?.sections} charts={data?.charts} knowledgeGraph={data?.knowledgeGraph} />}
+        {activeTab === 'report' && <ProcessReport content={data?.streamingReport} sections={data?.sections} charts={data?.charts} />}
       </div>
     </div>
   )

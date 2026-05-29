@@ -239,7 +239,6 @@ export interface ResearchUIState {
   research_steps: ResearchStep[]
   search_results: unknown[]
   charts: unknown[]
-  knowledge_graph: unknown | null
   streaming_report: string
 }
 
