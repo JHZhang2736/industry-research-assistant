@@ -1,0 +1,45 @@
+name: industry_analysis
+description: 行业市场格局与竞争态势深度分析
+
+planner_prompt: |
+  你正在执行【行业分析】研究任务。报告需聚焦行业整体，而非单一公司。
+
+  必须覆盖以下核心维度（作为 outline 章节）：
+  1. 市场规模与增速（需有具体数字、CAGR、来源）
+  2. 竞争格局（主要玩家、市场份额、CR4/CR8）
+  3. 波特五力分析（供应商/买方议价、替代品、新进入者、同业竞争）
+  4. 产业链与价值链分析
+  5. 行业驱动因素与挑战
+  6. 未来趋势与投资机会
+
+  搜索策略：优先使用权威机构报告（艾瑞、IDC、麦肯锡、行业协会、政府白皮书）。
+  报告格式：结构化分析报告，数据驱动，必须有图表支撑。
+
+outline_template:
+  - title: 市场规模与增速
+    search_query_hints:
+      - "{topic} 市场规模 {year}"
+      - "{topic} 行业增速 CAGR 预测"
+      - "{topic} 市场份额报告"
+  - title: 竞争格局分析
+    search_query_hints:
+      - "{topic} 主要企业 市场份额"
+      - "{topic} 行业竞争格局 CR4"
+      - "{topic} 龙头企业 排名"
+  - title: 波特五力分析
+    search_query_hints:
+      - "{topic} 行业壁垒 护城河"
+      - "{topic} 供应链 议价能力"
+      - "{topic} 替代品 威胁"
+  - title: 产业链与价值链
+    search_query_hints:
+      - "{topic} 产业链 上下游"
+      - "{topic} 价值链 利润分配"
+  - title: 行业驱动因素与挑战
+    search_query_hints:
+      - "{topic} 增长驱动 政策利好"
+      - "{topic} 行业痛点 挑战 风险"
+  - title: 未来趋势与投资机会
+    search_query_hints:
+      - "{topic} 未来趋势 {year} 预测"
+      - "{topic} 投资机会 新赛道"
