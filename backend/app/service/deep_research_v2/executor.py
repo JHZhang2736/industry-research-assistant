@@ -76,7 +76,8 @@ async def _gather_with_cancel_watch(
     # asyncio.gather 已经返回一个自动调度的 _GatheringFuture，不能再 wrap
     # 到 create_task 里（Py 3.11+ 会报 TypeError: a coroutine was expected）。
     gather_future = asyncio.gather(*[
-        execute_one_step(step, state) for step in batch
+        execute_one_step(step, state, langsmith_extra=_step_trace_extra(step, state))
+        for step in batch
     ])
 
     session_id = state.get("session_id", "")
@@ -285,6 +286,9 @@ def all_steps_done(
     return all(step["step_id"] in completed_ids for step in plan)
 
 
+@traceable(run_type="tool",
+           process_inputs=_trace_step_inputs,
+           process_outputs=_trace_step_outputs)
 async def execute_one_step(
     step: Dict[str, Any],
     state: ResearchState,
