@@ -160,6 +160,10 @@ class ResearchState(TypedDict):
     search_web: bool                        # 是否启用网络搜索
     search_local: bool                      # 是否启用本地知识库搜索
 
+    # 意图识别结果
+    intent: str                              # "deep_research" | "web_search" | "simple_qa" | "out_of_scope"
+    research_type: str                       # deep_research 专用，默认 "general"
+
     # 规划输出
     outline: List[Dict[str, Any]]           # 动态大纲 (Section序列化)
     mind_map: Dict[str, Any]                # 知识图谱/思维导图
@@ -222,6 +226,8 @@ def create_initial_state(
         max_iterations=3,
         search_web=search_web,
         search_local=search_local,
+        intent="",
+        research_type="general",
         outline=[],
         mind_map={},
         key_entities=[],

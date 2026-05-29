@@ -1,0 +1,45 @@
+name: company_research
+description: 单一公司深度调研报告（尽调式）
+
+planner_prompt: |
+  你正在执行【公司调研】研究任务。报告聚焦于单一公司的全面深度分析。
+
+  必须覆盖以下核心维度（作为 outline 章节）：
+  1. 公司概况与商业模式（业务构成、收入来源、客户群体）
+  2. 财务分析（营收/利润趋势、主要财务指标 PE/PB/ROE/毛利率）
+  3. 核心竞争优势（技术壁垒、品牌、渠道、规模效应）
+  4. 管理层与股权结构
+  5. 行业地位与竞争对手
+  6. 风险因素与投资建议
+
+  搜索策略：优先使用公司官方财报、招股书、券商研究报告、公告。
+  报告格式：尽调式深度报告，财务数据精确，风险明确量化。
+
+outline_template:
+  - title: 公司概况与商业模式
+    search_query_hints:
+      - "{topic} 商业模式 业务介绍"
+      - "{topic} 收入构成 主营业务"
+      - "{topic} 公司简介 发展历程"
+  - title: 财务分析
+    search_query_hints:
+      - "{topic} 财报 营收 利润 {year}"
+      - "{topic} 毛利率 净利率 ROE"
+      - "{topic} 现金流 负债率"
+  - title: 核心竞争优势
+    search_query_hints:
+      - "{topic} 竞争优势 护城河"
+      - "{topic} 技术壁垒 专利"
+      - "{topic} 品牌价值 市场地位"
+  - title: 管理层与股权结构
+    search_query_hints:
+      - "{topic} 管理团队 CEO 创始人"
+      - "{topic} 股权结构 大股东"
+  - title: 行业地位与竞争对手
+    search_query_hints:
+      - "{topic} 市场份额 行业排名"
+      - "{topic} 竞争对手 对比"
+  - title: 风险因素与投资建议
+    search_query_hints:
+      - "{topic} 风险 挑战 不确定性"
+      - "{topic} 投资价值 估值"

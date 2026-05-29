@@ -11,6 +11,7 @@ Plan -> Research -> Analyze -> Write -> Review -> (Revise) -> Complete
 
 import logging
 import asyncio
+import uuid
 from typing import Dict, Any, List, Literal, AsyncGenerator, Optional
 from datetime import datetime
 
@@ -30,6 +31,19 @@ except (ImportError, SyntaxError):
 from langgraph.graph import StateGraph, END
 
 from .state import ResearchState, ResearchPhase, create_initial_state
+
+try:
+    from service.intent_service import IntentService
+    from service.intent_handlers import web_search_node, simple_qa_node, out_of_scope_node
+except ImportError:
+    from app.service.intent_service import IntentService
+    from app.service.intent_handlers import web_search_node, simple_qa_node, out_of_scope_node
+
+try:
+    from service.research_type_service import ResearchTypeService
+except ImportError:
+    from app.service.research_type_service import ResearchTypeService
+
 from .agents import (
     DeepScout, CodeWizard, CriticMaster, LeadWriter, DataAnalyst,
     Planner, Replanner,
@@ -64,12 +78,58 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("DeepResearchGraph")
 
 
+def _update_root_run_tags(root_run_id, base_tags, intent=None, research_type=None) -> None:
+    """图执行完成后，用 LangSmith Client 给根 run 补写 intent/research_type 标签。
+
+    为什么不在节点内 mutate run tree：LangGraph 走 callback 追踪，
+    get_current_run_tree() 返回的对象不是 tracer 实际 PATCH 的对象，mutate 不持久化。
+    可靠做法是预生成根 run_id（写进 config），图跑完后用已知 id 直接 update_run。
+    此时 tracer 的最终 PATCH 已完成，我们的 update 是最后一次写入，必然生效。
+
+    tags 是覆盖式更新，需带上 base_tags（trace_config 里的原始标签）一并写回。
+    LangSmith 未启用时静默跳过。
+    """
+    try:
+        from langsmith import Client
+    except ImportError:
+        return
+    try:
+        tags = list(base_tags)
+        metadata = {}
+        if intent is not None:
+            tags.append(f"intent:{intent}")
+            metadata["intent"] = intent
+        if research_type:
+            tags.append(f"research_type:{research_type}")
+            metadata["research_type"] = research_type
+        Client().update_run(root_run_id, tags=tags, extra={"metadata": metadata})
+        logger.info(f"[langsmith-tag] 根 run {root_run_id} 已补写 intent={intent} research_type={research_type}")
+    except Exception as e:
+        logger.warning(f"[langsmith-tag] update_run 失败（不影响主流程）: {e!r}")
+
+
 # ============================================================================
 # 模块级路由函数（v3 Plan-and-Execute）
 # ============================================================================
 
 MAX_REPLAN = 3
 QUALITY_PASS_THRESHOLD = 7.0  # critic 给分 < 该值即视为"未通过"，需 replan
+
+
+def route_after_intent(state: ResearchState) -> str:
+    """intent_router 节点后的条件路由。
+
+    deep_research 路由到 deep_research 子图节点（整条链路在一个 run 内，
+    便于 LangSmith 单独统计链路耗时/token）。
+    """
+    intent = state.get("intent", "deep_research")
+    if intent == "web_search":
+        return "web_search"
+    if intent == "simple_qa":
+        return "simple_qa"
+    if intent == "out_of_scope":
+        return "out_of_scope"
+    return "deep_research"
 
 
 def route_after_critic(state: ResearchState) -> str:
@@ -190,6 +250,20 @@ class DeepResearchGraph:
         # 检查点服务
         self.checkpoint_service = get_checkpoint_service()
 
+        # 意图识别服务
+        self.intent_service = IntentService(
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=config.intent_model,
+        )
+
+        # 研究类型识别服务（Level 2）
+        self.research_type_service = ResearchTypeService(
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=config.intent_model,
+        )
+
         # 构建图
         self.graph = self._build_langgraph()
 
@@ -244,51 +318,137 @@ class DeepResearchGraph:
             return None
         return self.checkpoint_service.get_checkpoint_info(session_id)
 
-    def _build_langgraph(self):
-        """构建 v3 Plan-and-Execute 主图
+    def _build_deep_research_subgraph(self):
+        """构建 deep_research 内层子图（Plan-and-Execute）。
+
+        作为外层图的单个节点挂载，使整条研究链路在 LangSmith trace 里
+        成为一个独立 run —— 该 run 的耗时/token = 整条 deep_research 链路。
 
         拓扑：
 
-            planner → executor → critic
-                                   ├── pass → END
-                                   └── needs_revision → replanner
-                                                          ├── max_replan → END
-                                                          ├── (TODO) fallback
-                                                          └── default → executor
+            research_type_router → planner → executor → critic
+                                                          ├── pass → END
+                                                          └── needs_revision → replanner
+                                                                                 ├── max_replan → END
+                                                                                 └── default → executor
         """
-        workflow = StateGraph(ResearchState)
+        sub = StateGraph(ResearchState)
 
-        # 4 个主 node
-        workflow.add_node("planner", self._planner_node)
-        workflow.add_node("executor", executor_node)
-        workflow.add_node("critic", self._critic_node)
-        workflow.add_node("replanner", self._replanner_node)
+        sub.add_node("research_type_router", self._research_type_router_node)
+        sub.add_node("planner", self._planner_node)
+        sub.add_node("executor", executor_node)
+        sub.add_node("critic", self._critic_node)
+        sub.add_node("replanner", self._replanner_node)
 
-        workflow.set_entry_point("planner")
+        sub.set_entry_point("research_type_router")
+        sub.add_edge("research_type_router", "planner")
+        sub.add_edge("planner", "executor")
+        sub.add_edge("executor", "critic")
 
-        # 顺序边
-        workflow.add_edge("planner", "executor")
-        workflow.add_edge("executor", "critic")
-
-        # critic 之后的条件路由
-        workflow.add_conditional_edges(
+        sub.add_conditional_edges(
             "critic",
             route_after_critic,
             {"END": END, "replanner": "replanner"},
         )
-
-        # replanner 之后的条件路由
-        workflow.add_conditional_edges(
+        sub.add_conditional_edges(
             "replanner",
             route_after_replanner,
+            {"END": END, "executor": "executor"},
+        )
+
+        return sub.compile()
+
+    def _build_langgraph(self):
+        """构建外层路由图：意图识别入口 + 四条分支。
+
+        拓扑：
+
+            intent_router
+              ├── web_search    → END
+              ├── simple_qa     → END
+              ├── out_of_scope  → END
+              └── deep_research（子图，整条研究链路）→ END
+        """
+        workflow = StateGraph(ResearchState)
+
+        # 意图路由入口
+        workflow.add_node("intent_router", self._intent_router_node)
+
+        # 轻量路径节点
+        workflow.add_node("web_search", web_search_node)
+        workflow.add_node("simple_qa", simple_qa_node)
+        workflow.add_node("out_of_scope", out_of_scope_node)
+
+        # 深度研究子图作为单个节点挂载（共享 ResearchState）
+        workflow.add_node("deep_research", self._build_deep_research_subgraph())
+
+        workflow.set_entry_point("intent_router")
+
+        workflow.add_conditional_edges(
+            "intent_router",
+            route_after_intent,
             {
-                "END": END,
-                "executor": "executor",
-                # TODO(phase-2): "supervisor_fallback": "supervisor_fallback"
+                "web_search": "web_search",
+                "simple_qa": "simple_qa",
+                "out_of_scope": "out_of_scope",
+                "deep_research": "deep_research",
             },
         )
 
+        workflow.add_edge("web_search", END)
+        workflow.add_edge("simple_qa", END)
+        workflow.add_edge("out_of_scope", END)
+        workflow.add_edge("deep_research", END)
+
         return workflow.compile()
+
+    async def _intent_router_node(self, state: ResearchState) -> Dict[str, Any]:
+        """意图识别入口节点：function calling 分类，写入 intent/research_type，推 SSE 事件。"""
+        self._maybe_cancel(state)
+
+        query = state.get("query", "")
+        result = await self.intent_service.classify(query)
+
+        logger.info(f"Intent detected: {result.intent} (confidence={result.confidence:.2f}) for: {query[:50]}")
+
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({
+                "type": "intent_detected",
+                "intent": result.intent,
+                "research_type": result.research_type,
+                "confidence": result.confidence,
+            })
+        except (ImportError, RuntimeError, KeyError):
+            pass
+
+        return {"intent": result.intent, "research_type": result.research_type}
+
+    async def _research_type_router_node(self, state: ResearchState) -> Dict[str, Any]:
+        """研究类型识别节点（Level 2）：仅在 deep_research 路径触发。"""
+        self._maybe_cancel(state)
+
+        query = state.get("query", "")
+        result = await self.research_type_service.classify(query)
+
+        logger.info(
+            f"Research type detected: {result.research_type} "
+            f"(confidence={result.confidence:.2f}) for: {query[:50]}"
+        )
+
+        try:
+            from langgraph.config import get_stream_writer
+            writer = get_stream_writer()
+            writer({
+                "type": "research_type_detected",
+                "research_type": result.research_type,
+                "confidence": result.confidence,
+            })
+        except (ImportError, RuntimeError, KeyError):
+            pass
+
+        return {"research_type": result.research_type}
 
     def _maybe_cancel(self, state: ResearchState) -> None:
         """在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。"""
@@ -492,6 +652,13 @@ class DeepResearchGraph:
         # 这里 updates 流是"节点完成"的回报，用于检查点+完成统计。
         # v3 Plan-and-Execute 4 个主 node。executor 内部完成 search/analyze/charts/write，
         # 因此 executor 完成事件 phase 选 "executing"（前端把它映射成研究中状态）。
+        # 路由节点（意图识别、轻量回答）不发 phase 事件，避免前端显示多余状态条
+        # 静默节点：路由/轻量节点 + deep_research 子图节点本身（其内部节点会各自发 phase 事件，
+        # 子图作为外层节点的完成更新不再重复发）
+        SILENT_NODES = {
+            "intent_router", "research_type_router", "web_search", "simple_qa",
+            "out_of_scope", "deep_research",
+        }
         node_to_phase_info = {
             "planner": ("planning", "规划完成"),
             "executor": ("executing", "执行批次完成"),
@@ -512,17 +679,27 @@ class DeepResearchGraph:
         query = state.get("query", "")
         # run_name 用于 LangSmith run 列表展示，去掉换行避免标签里出现字面 \n
         run_label = query[:40].replace("\n", " ").strip() if query else ""
+        # 预生成根 run_id：图跑完后用它给根 run 补写 intent/research_type 标签（可靠跨 trace 聚合）
+        # session_id 不放进 tags（会污染 tag 维度聚合），它已在 metadata 里可按字段过滤
+        root_run_id = uuid.uuid4()
+        base_tags = ["deep_research_v3"]
         trace_config = {
+            "run_id": root_run_id,
             "run_name": f"research: {run_label}" if run_label else "research",
             "metadata": {"session_id": session_id, "query": query},
-            "tags": ["deep_research_v3"] + ([session_id] if session_id else []),
+            "tags": base_tags,
         }
 
         try:
-            async for mode, chunk in self.graph.astream(
+            # subgraphs=True：deep_research 子图内部各节点的 custom/updates 事件也会冒泡上来，
+            # 否则子图只会作为一个整体 update 出现，丢失逐节点的 phase 事件和检查点。
+            # 此时每次 yield 为 3 元组 (namespace, mode, chunk)，namespace 仅用于区分层级，
+            # 业务逻辑仍按 chunk 里的 node_name 处理，无需关心 namespace。
+            async for _ns, mode, chunk in self.graph.astream(
                 state,
                 config=trace_config,
                 stream_mode=["custom", "updates"],
+                subgraphs=True,
             ):
                 if mode == "custom":
                     # agent 内部 stream_writer 推的事件，直接转发
@@ -537,16 +714,16 @@ class DeepResearchGraph:
                         # 合并 diff 到 last_state 以便检查点保存看到完整状态
                         last_state.update(node_diff)
 
-                        phase_key, phase_msg = node_to_phase_info.get(
-                            node_name, (node_name, f"{node_name} 完成")
-                        )
-
-                        # 发 phase 事件
-                        yield {
-                            "type": "phase",
-                            "phase": phase_key,
-                            "content": phase_msg,
-                        }
+                        # 路由节点静默，只有研究主链路节点发 phase 事件
+                        if node_name not in SILENT_NODES:
+                            phase_key, phase_msg = node_to_phase_info.get(
+                                node_name, (node_name, f"{node_name} 完成")
+                            )
+                            yield {
+                                "type": "phase",
+                                "phase": phase_key,
+                                "content": phase_msg,
+                            }
 
                         # 触发检查点保存（落 PG，含完整后端状态 + UI 状态）
                         cp_event = self._build_checkpoint_event(
@@ -562,6 +739,7 @@ class DeepResearchGraph:
                     self.checkpoint_service.update_status(session_id, "cancelled")
                 except Exception as e:
                     logger.debug(f"update_status(cancelled) failed (non-fatal): {e}")
+            self._tag_root(root_run_id, base_tags, last_state, extra_tags=["status:cancelled"])
             yield {"type": "research_cancelled", "message": "研究已取消"}
             return
 
@@ -572,8 +750,12 @@ class DeepResearchGraph:
                     self.checkpoint_service.update_status(session_id, "failed", str(e))
                 except Exception as e:
                     logger.debug(f"update_status(failed) failed (non-fatal): {e}")
+            self._tag_root(root_run_id, base_tags, last_state, extra_tags=["status:failed"])
             yield {"type": "error", "content": str(e)}
             return
+
+        # 图跑完，给根 run 补写意图/研究类型标签（用于 LangSmith 跨 trace 按意图聚合）
+        self._tag_root(root_run_id, base_tags, last_state)
 
         # 完成事件：发给前端展示研究结果摘要（final_report、quality_score、统计、references）
         if self.checkpoint_service and session_id:
@@ -583,6 +765,21 @@ class DeepResearchGraph:
                 logger.debug(f"update_status(completed) failed (non-fatal): {e}")
 
         yield self._build_completion_event(last_state)
+
+    def _tag_root(self, root_run_id, base_tags, last_state, extra_tags=None):
+        """从最终 state 提取 intent/research_type，给根 run 补写标签。
+
+        research_type 仅在 deep_research 路径有意义（其余路径 research_type_router
+        未执行，保持默认值，不写入）。extra_tags 用于附加 status:failed/cancelled 等。
+        """
+        intent = last_state.get("intent")
+        research_type = last_state.get("research_type") if intent == "deep_research" else None
+        _update_root_run_tags(
+            root_run_id,
+            list(base_tags) + list(extra_tags or []),
+            intent=intent,
+            research_type=research_type,
+        )
 
     def _build_ui_references(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         """将 state.references + facts 转换为前端友好的引用列表"""

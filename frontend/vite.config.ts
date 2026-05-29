@@ -1,17 +1,21 @@
 
 
+import path from 'path'
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv } from 'vite'
 import { viteMockServe } from 'vite-plugin-mock'
 
+const envDir = path.resolve(__dirname, '..')
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd()) as {
+  const env = loadEnv(mode, envDir) as {
     VITE_API_BASE: string
     VITE_API_PROXY: string
   }
 
   return {
+    envDir,
     server: {
       port: 5183,
       host: '0.0.0.0',

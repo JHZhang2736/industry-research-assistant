@@ -1,0 +1,42 @@
+name: comparative_analysis
+description: 多主体横向对比分析报告
+
+planner_prompt: |
+  你正在执行【竞品对比】研究任务。报告需对多个主体（公司/产品/方案）进行结构化横向对比。
+
+  必须覆盖以下核心维度（作为 outline 章节）：
+  1. 对比主体概况（各主体基本信息并排呈现）
+  2. 业务模式与产品对比
+  3. 财务与规模对比（关键指标横向对比表格）
+  4. 技术/产品能力对比
+  5. 市场表现与用户口碑对比
+  6. 综合评估与选择建议
+
+  搜索策略：每个对比主体分别搜索，获取同维度可比数据。
+  报告格式：大量使用表格进行并排对比，每维度给出优劣评分，最终给出综合结论。
+
+outline_template:
+  - title: 对比主体概况
+    search_query_hints:
+      - "{topic} 各主体 基本信息 概况"
+      - "{topic} 成立时间 规模 背景"
+  - title: 业务模式与产品对比
+    search_query_hints:
+      - "{topic} 产品功能 对比"
+      - "{topic} 商业模式 差异"
+  - title: 财务与规模对比
+    search_query_hints:
+      - "{topic} 营收 市值 规模 对比"
+      - "{topic} 财务指标 对比表"
+  - title: 技术与产品能力对比
+    search_query_hints:
+      - "{topic} 技术能力 对比"
+      - "{topic} 产品优劣势 评测"
+  - title: 市场表现与用户口碑
+    search_query_hints:
+      - "{topic} 用户评价 口碑"
+      - "{topic} 市场占有率 对比"
+  - title: 综合评估与选择建议
+    search_query_hints:
+      - "{topic} 综合评比 哪个更好"
+      - "{topic} 推荐 适用场景"

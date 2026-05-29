@@ -225,7 +225,9 @@ export default function Index() {
       target.loading = true
       try {
         let res
-        if (target.type === ChatType.Deepsearch) {
+        // API 选择依赖 searchModes（用户主动选择的模式），而非 target.type
+        // target.type 初始为 Normal，intent_detected 后才切换，不能用于路由判断
+        if ((deviceState.searchModes as string[]).length > 0) {
           res = await api.session.deepsearch({
             query: message,
             session_id: id,  // 传递会话 ID 用于检查点保存
@@ -301,6 +303,32 @@ export default function Index() {
           }
 
           const json = JSON.parse(str)
+
+          // 意图识别事件：在 Deepsearch/Normal 分支判断前处理
+          if (json.type === 'intent_detected') {
+            if (json.intent === 'deep_research') {
+              // 确认是深度研究后才切换类型并初始化面板，彻底消除闪烁
+              target.type = ChatType.Deepsearch
+              target.reactMode = true
+              if (!target.reactSteps) target.reactSteps = []
+              target.reactSteps.push({
+                step: 0,
+                type: 'plan',
+                content: `🔬 开始深度研究`,
+                timestamp: Date.now(),
+              })
+            } else {
+              target.type = ChatType.Normal
+              target.reactMode = false
+              target.reactSteps = []
+            }
+            return
+          }
+          // research_type_detected 和 done 对前端 UI 无需额外操作
+          if (json.type === 'research_type_detected' || json.type === 'done') {
+            return
+          }
+
           if (target.type === ChatType.Deepsearch) {
             // 辅助函数：从 V2 格式中提取实际内容
             const extractContent = (data: any): string => {
@@ -314,20 +342,8 @@ export default function Index() {
               return String(data || '')
             }
 
-            // V2 研究开始事件
+            // V2 研究开始事件：只重置状态，panel 初始化延迟到 intent_detected 确认后
             if (json.type === 'research_start') {
-              target.reactMode = true
-              if (!target.reactSteps) {
-                target.reactSteps = []
-              }
-              target.reactSteps.push({
-                step: 0,
-                type: 'plan',
-                content: `🔬 开始深度研究: ${json.query || ''}`,
-                timestamp: Date.now(),
-              })
-              // 重置研究步骤
-              console.log(`[前端] ⚠️ research_start: 清空 researchDetailsRef`)
               setResearchSteps([])
               researchDetailsRef.current.clear()
               setSelectedResearchDetail(null)
@@ -1077,7 +1093,7 @@ export default function Index() {
       chat.list.push({
         id: createChatId(),
         role: ChatRole.Assistant,
-        type: (deviceState.searchModes as string[]).length > 0 ? ChatType.Deepsearch : ChatType.Normal,
+        type: ChatType.Normal,  // 统一先 Normal，intent_detected 确认 deep_research 后再切换
         content: '',
       })
       scrollToBottom()
