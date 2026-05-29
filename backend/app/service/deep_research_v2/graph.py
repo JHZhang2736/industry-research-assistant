@@ -82,25 +82,35 @@ def _tag_langsmith_run(*, intent: str = None, research_type: str = None) -> None
 
     打到 metadata（可在 LangSmith 里按字段 filter/group）+ tags（列表页快速筛选）。
     LangSmith 未启用或不在 trace 上下文时静默跳过，不影响主流程。
+
+    注意：当前带 DEBUG 诊断日志，用于确认 get_current_run_tree() 在 LangGraph
+    callback 追踪上下文里是否返回真实 run。验证完成后可降级为静默。
     """
     try:
         from langsmith.run_helpers import get_current_run_tree
         run = get_current_run_tree()
         if run is None:
+            logger.warning("[langsmith-tag] get_current_run_tree() 返回 None，标签未写入")
             return
         # 找到根 run（图级别），把标签打在它上面，便于整条 trace 聚合
         root = run
+        depth = 0
         while getattr(root, "parent_run", None) is not None:
             root = root.parent_run
+            depth += 1
         if intent is not None:
             root.metadata["intent"] = intent
             root.tags = list(set((root.tags or []) + [f"intent:{intent}"]))
         if research_type is not None:
             root.metadata["research_type"] = research_type
             root.tags = list(set((root.tags or []) + [f"research_type:{research_type}"]))
-    except Exception:
-        # LangSmith 未安装/未启用/API 变动等，均不影响主流程
-        pass
+        logger.info(
+            f"[langsmith-tag] 已写入 root run (name={getattr(root, 'name', '?')}, "
+            f"id={getattr(root, 'id', '?')}, parent_depth={depth}) "
+            f"intent={intent} research_type={research_type} tags={root.tags}"
+        )
+    except Exception as e:
+        logger.warning(f"[langsmith-tag] 写入失败: {e!r}")
 
 
 # ============================================================================
@@ -112,7 +122,11 @@ QUALITY_PASS_THRESHOLD = 7.0  # critic 给分 < 该值即视为"未通过"，需
 
 
 def route_after_intent(state: ResearchState) -> str:
-    """intent_router 节点后的条件路由。"""
+    """intent_router 节点后的条件路由。
+
+    deep_research 路由到 deep_research 子图节点（整条链路在一个 run 内，
+    便于 LangSmith 单独统计链路耗时/token）。
+    """
     intent = state.get("intent", "deep_research")
     if intent == "web_search":
         return "web_search"
@@ -120,7 +134,7 @@ def route_after_intent(state: ResearchState) -> str:
         return "simple_qa"
     if intent == "out_of_scope":
         return "out_of_scope"
-    return "research_type_router"
+    return "deep_research"
 
 
 def route_after_critic(state: ResearchState) -> str:
@@ -309,20 +323,56 @@ class DeepResearchGraph:
             return None
         return self.checkpoint_service.get_checkpoint_info(session_id)
 
+    def _build_deep_research_subgraph(self):
+        """构建 deep_research 内层子图（Plan-and-Execute）。
+
+        作为外层图的单个节点挂载，使整条研究链路在 LangSmith trace 里
+        成为一个独立 run —— 该 run 的耗时/token = 整条 deep_research 链路。
+
+        拓扑：
+
+            research_type_router → planner → executor → critic
+                                                          ├── pass → END
+                                                          └── needs_revision → replanner
+                                                                                 ├── max_replan → END
+                                                                                 └── default → executor
+        """
+        sub = StateGraph(ResearchState)
+
+        sub.add_node("research_type_router", self._research_type_router_node)
+        sub.add_node("planner", self._planner_node)
+        sub.add_node("executor", executor_node)
+        sub.add_node("critic", self._critic_node)
+        sub.add_node("replanner", self._replanner_node)
+
+        sub.set_entry_point("research_type_router")
+        sub.add_edge("research_type_router", "planner")
+        sub.add_edge("planner", "executor")
+        sub.add_edge("executor", "critic")
+
+        sub.add_conditional_edges(
+            "critic",
+            route_after_critic,
+            {"END": END, "replanner": "replanner"},
+        )
+        sub.add_conditional_edges(
+            "replanner",
+            route_after_replanner,
+            {"END": END, "executor": "executor"},
+        )
+
+        return sub.compile()
+
     def _build_langgraph(self):
-        """构建 v3 Plan-and-Execute 主图（含意图路由入口）
+        """构建外层路由图：意图识别入口 + 四条分支。
 
         拓扑：
 
             intent_router
-              ├── web_search   → END
-              ├── simple_qa    → END
-              ├── out_of_scope → END
-              └── planner → executor → critic
-                                         ├── pass → END
-                                         └── needs_revision → replanner
-                                                                ├── max_replan → END
-                                                                └── default → executor
+              ├── web_search    → END
+              ├── simple_qa     → END
+              ├── out_of_scope  → END
+              └── deep_research（子图，整条研究链路）→ END
         """
         workflow = StateGraph(ResearchState)
 
@@ -334,19 +384,11 @@ class DeepResearchGraph:
         workflow.add_node("simple_qa", simple_qa_node)
         workflow.add_node("out_of_scope", out_of_scope_node)
 
-        # Level 2 研究类型路由节点
-        workflow.add_node("research_type_router", self._research_type_router_node)
+        # 深度研究子图作为单个节点挂载（共享 ResearchState）
+        workflow.add_node("deep_research", self._build_deep_research_subgraph())
 
-        # 深度研究路径节点（原有）
-        workflow.add_node("planner", self._planner_node)
-        workflow.add_node("executor", executor_node)
-        workflow.add_node("critic", self._critic_node)
-        workflow.add_node("replanner", self._replanner_node)
-
-        # 入口改为 intent_router
         workflow.set_entry_point("intent_router")
 
-        # intent_router 条件分流
         workflow.add_conditional_edges(
             "intent_router",
             route_after_intent,
@@ -354,34 +396,14 @@ class DeepResearchGraph:
                 "web_search": "web_search",
                 "simple_qa": "simple_qa",
                 "out_of_scope": "out_of_scope",
-                "research_type_router": "research_type_router",
+                "deep_research": "deep_research",
             },
         )
 
-        # 轻量路径直接结束
         workflow.add_edge("web_search", END)
         workflow.add_edge("simple_qa", END)
         workflow.add_edge("out_of_scope", END)
-        workflow.add_edge("research_type_router", "planner")
-
-        # 深度研究路径（原有逻辑不变）
-        workflow.add_edge("planner", "executor")
-        workflow.add_edge("executor", "critic")
-
-        workflow.add_conditional_edges(
-            "critic",
-            route_after_critic,
-            {"END": END, "replanner": "replanner"},
-        )
-
-        workflow.add_conditional_edges(
-            "replanner",
-            route_after_replanner,
-            {
-                "END": END,
-                "executor": "executor",
-            },
-        )
+        workflow.add_edge("deep_research", END)
 
         return workflow.compile()
 
@@ -642,7 +664,12 @@ class DeepResearchGraph:
         # v3 Plan-and-Execute 4 个主 node。executor 内部完成 search/analyze/charts/write，
         # 因此 executor 完成事件 phase 选 "executing"（前端把它映射成研究中状态）。
         # 路由节点（意图识别、轻量回答）不发 phase 事件，避免前端显示多余状态条
-        SILENT_NODES = {"intent_router", "research_type_router", "web_search", "simple_qa", "out_of_scope"}
+        # 静默节点：路由/轻量节点 + deep_research 子图节点本身（其内部节点会各自发 phase 事件，
+        # 子图作为外层节点的完成更新不再重复发）
+        SILENT_NODES = {
+            "intent_router", "research_type_router", "web_search", "simple_qa",
+            "out_of_scope", "deep_research",
+        }
         node_to_phase_info = {
             "planner": ("planning", "规划完成"),
             "executor": ("executing", "执行批次完成"),
@@ -670,10 +697,15 @@ class DeepResearchGraph:
         }
 
         try:
-            async for mode, chunk in self.graph.astream(
+            # subgraphs=True：deep_research 子图内部各节点的 custom/updates 事件也会冒泡上来，
+            # 否则子图只会作为一个整体 update 出现，丢失逐节点的 phase 事件和检查点。
+            # 此时每次 yield 为 3 元组 (namespace, mode, chunk)，namespace 仅用于区分层级，
+            # 业务逻辑仍按 chunk 里的 node_name 处理，无需关心 namespace。
+            async for _ns, mode, chunk in self.graph.astream(
                 state,
                 config=trace_config,
                 stream_mode=["custom", "updates"],
+                subgraphs=True,
             ):
                 if mode == "custom":
                     # agent 内部 stream_writer 推的事件，直接转发
