@@ -2,188 +2,171 @@
 
 ## 目标
 
-在 `/research/stream` 接口前置一层意图识别，将用户查询自动分流到合适的处理路径，避免所有请求都触发代价高昂的 Plan-and-Execute 全流程。
+在现有 Plan-and-Execute 研究流程前置一层意图识别，将用户查询自动分流到合适的处理路径，避免所有请求都触发代价高昂的全流程。不需要规划的任务不进入 Planner。
 
 ---
 
-## 架构概览
+## 最终架构：LangGraph 子图方案
 
 ```
 POST /research/stream
   │
-  ├─ IntentService（qwen-turbo, few-shot, <500ms）
-  │     └─ 发送 SSE: intent_detected
-  │
-  ├─ deep_research  → DeepResearchV2Service（现有，不改）
-  ├─ web_search     → WebSearchHandler（新建）
-  ├─ simple_qa      → SimpleQAHandler（新建）
-  └─ out_of_scope   → OutOfScopeHandler（新建）
+  └─ RouterGraph（新，外层路由图）
+       │
+       ├─ IntentRouter 节点（新）
+       │    function calling → qwen-turbo
+       │    写入 intent / research_type 到 state
+       │    发送 SSE: intent_detected
+       │
+       ├─ deep_research ──→ DeepResearchSubgraph（现有图，直接编译为子图）
+       │                      Planner → Executor → Critic → Replanner
+       │
+       ├─ web_search ─────→ WebSearchNode（新，Serper + qwen-turbo 合成）
+       │
+       ├─ simple_qa ──────→ SimpleQANode（新，qwen-turbo 直接回答）
+       │
+       └─ out_of_scope ───→ OutOfScopeNode（新，固定拒绝消息）
 ```
 
 ---
 
-## 意图分类
+## 意图分类（Function Calling 工具定义）
 
-| 意图 | 触发场景 | 示例 |
+每个意图对应一个独立 tool，LLM 选择最匹配的工具：
+
+| Tool 名称 | 触发场景 | 示例 |
 |---|---|---|
 | `deep_research` | 需要深度调研的行业/市场/公司分析 | "分析中国新能源汽车行业的竞争格局" |
-| `web_search` | 需要实时信息但不需要深度分析 | "最新CPI数据是多少" / "今天有什么财经新闻" |
+| `web_search` | 需要实时信息但不需要深度分析 | "最新CPI数据" / "今天有什么财经新闻" |
 | `simple_qa` | 概念解释、定义、常识性问题 | "什么是市盈率PE" / "ROE怎么计算" |
 | `out_of_scope` | 领域外问题、闲聊 | "帮我写首诗" / "今天天气怎么样" |
 
+`deep_research` tool 携带 `research_type` 参数，供后续细分研究流程：
+
+```python
+{
+  "name": "deep_research",
+  "parameters": {
+    "research_type": {
+      "type": "string",
+      "enum": ["general"],   # 后续扩展: "industry_analysis", "company_research", "comparative"
+      "description": "研究类型，影响 Planner 使用的 prompt 配置"
+    }
+  }
+}
+```
+
+> 扩展新研究类型只需：① 在 enum 加一项 ② Planner 里加对应 prompt 配置，其余代码不动。
+
 ---
 
-## 新建文件
+## State 设计
 
-### `backend/app/service/intent_service.py`
+### 外层 RouterState（新建）
 
-**职责：** 调用 DashScope qwen-turbo，few-shot 分类用户查询，返回结构化意图结果。
-
-**接口：**
 ```python
-class IntentService:
-    async def classify(self, query: str) -> IntentResult:
-        ...
+class RouterState(TypedDict):
+    query: str
+    session_id: str
+    intent: str                    # "deep_research" | "web_search" | "simple_qa" | "out_of_scope"
+    research_type: str             # deep_research 专用，默认 "general"
+    messages: List[Dict]           # SSE 消息队列（与内层图共享 key）
+```
 
+### 内层 ResearchState（现有，不改）
+
+父子图通过共享 key 通信：`query`、`session_id`、`messages` 三个字段对齐，其余字段（`outline`、`facts` 等）只存在于子图内部。
+
+---
+
+## 新建 / 修改文件
+
+### 新建文件
+
+| 文件 | 职责 | 预估行数 |
+|---|---|---|
+| `backend/app/service/intent_service.py` | IntentService：function calling 分类，返回 IntentResult | ~80 行 |
+| `backend/app/service/router_graph.py` | RouterGraph：外层路由图，含 4 个条件边 | ~100 行 |
+| `backend/app/service/intent_handlers.py` | WebSearchNode / SimpleQANode / OutOfScopeNode | ~80 行 |
+
+### 修改文件
+
+| 文件 | 改动内容 |
+|---|---|
+| `backend/app/service/deep_research_v2/graph.py` | 暴露 `compile_as_subgraph()` 方法（+5 行） |
+| `backend/app/service/deep_research_v2/state.py` | ResearchState 新增 `intent`、`research_type` 字段 |
+| `backend/app/service/deep_research_v2/service.py` | 换成调用 RouterGraph 而非 DeepResearchGraph |
+| `backend/app/config/llm_config.py` | 新增 `intent_model: str = "qwen-turbo"` |
+
+---
+
+## IntentService 设计
+
+```python
 @dataclass
 class IntentResult:
     intent: Literal["deep_research", "web_search", "simple_qa", "out_of_scope"]
-    confidence: float   # 0.0 ~ 1.0
-    reasoning: str      # 一句话解释
+    research_type: str    # deep_research 时有值，其余为 ""
+    confidence: float
+
+class IntentService:
+    async def classify(self, query: str) -> IntentResult: ...
 ```
 
-**实现细节：**
-- 使用 `openai` SDK 连接 DashScope（`DASHSCOPE_API_KEY` + `DASHSCOPE_BASE_URL`，已有）
-- 模型：`qwen-turbo`
-- 请求 JSON output（`response_format={"type": "json_object"}`）
-- Few-shot prompt 每类 3 条示例，共 12 条，覆盖边界情况
-- 解析失败时默认 fallback 到 `deep_research`，confidence=0.0
-
-**Few-shot 示例设计原则：**
-- `deep_research` vs `web_search` 边界：是否需要多源综合分析
-- `simple_qa` vs `deep_research` 边界：是否需要实时数据支撑
-- `out_of_scope`：明确非金融/行业研究领域
+- 使用 `openai` SDK 连接 DashScope（`DASHSCOPE_API_KEY` + `DASHSCOPE_BASE_URL`，已有环境变量）
+- 模型：`qwen-turbo`，`tool_choice="required"`
+- 解析失败时 fallback 到 `deep_research`，`confidence=0.0`
+- 目标延迟 **< 500ms**
 
 ---
 
-### `backend/app/service/intent_handlers.py`
+## 各节点 SSE 事件序列
 
-**职责：** 三个轻量 handler，每个返回 `AsyncGenerator[str, None]`（SSE 格式），与现有 DeepResearchV2Service 接口一致。
+所有路径均以 `intent_detected` 开始、`done` 结束：
 
-#### WebSearchHandler
-
+**deep_research：**
 ```
-流程：
-1. WebSearchService.search(query, gl="cn", hl="zh-cn") → top 5 结果
-2. 将结果格式化为 context
-3. qwen-turbo 流式生成回答（stream=True）
-4. yield SSE 事件
+intent_detected → （现有所有事件不变）→ done
 ```
 
-SSE 事件序列：
+**web_search：**
 ```
-{"type": "search_results", "results": [...]}   # 搜索结果摘要
-{"type": "answer_chunk", "content": "..."}     # 多条，流式
-{"type": "done"}
+intent_detected → search_results → answer_chunk(×N) → done
 ```
 
-#### SimpleQAHandler
-
+**simple_qa：**
 ```
-流程：
-1. qwen-turbo 直接流式生成（stream=True）
-2. yield SSE 事件
+intent_detected → answer_chunk(×N) → done
 ```
 
-SSE 事件序列：
+**out_of_scope：**
 ```
-{"type": "answer_chunk", "content": "..."}     # 多条，流式
-{"type": "done"}
-```
-
-**system prompt：** 定位为专业金融/行业研究助手，回答简洁准确，不超过 300 字。
-
-#### OutOfScopeHandler
-
-```
-流程：
-1. 直接 yield 固定拒绝消息
+intent_detected → answer_chunk → done
 ```
 
-SSE 事件序列：
-```
-{"type": "answer_chunk", "content": "抱歉，我专注于行业研究和金融分析领域，暂时无法回答这类问题。"}
-{"type": "done"}
-```
-
----
-
-## 修改文件
-
-### `backend/app/router/research_router.py`
-
-在 `stream_research` 中，`DeepResearchV2Service.research()` 调用前插入意图识别：
-
-```python
-async def generate_sse():
-    # 1. 意图识别
-    intent_result = await intent_service.classify(request.query)
-    yield format_sse({"type": "intent_detected",
-                      "intent": intent_result.intent,
-                      "confidence": intent_result.confidence})
-
-    # 2. 分流
-    if intent_result.intent == "deep_research":
-        async for event in service_v2.research(...):
-            yield event
-    elif intent_result.intent == "web_search":
-        async for event in web_search_handler.handle(request.query):
-            yield event
-    elif intent_result.intent == "simple_qa":
-        async for event in simple_qa_handler.handle(request.query):
-            yield event
-    else:  # out_of_scope
-        async for event in out_of_scope_handler.handle():
-            yield event
-```
-
-### `backend/app/config/llm_config.py`
-
-新增 intent 模型配置：
-
-```python
-@dataclass
-class LLMConfig:
-    ...
-    intent_model: str = "qwen-turbo"   # 意图识别专用模型
-```
-
----
-
-## SSE 新增事件类型
+### 新增 SSE 事件类型
 
 | 事件类型 | 字段 | 说明 |
 |---|---|---|
-| `intent_detected` | `intent`, `confidence` | 意图识别完成，分流前发送 |
-| `search_results` | `results: List[{title, url, snippet}]` | web_search handler 专用 |
-| `answer_chunk` | `content: str` | simple_qa / web_search / out_of_scope 的流式内容 |
-| `done` | — | 非 deep_research 路径的结束标志 |
-
-> `deep_research` 路径沿用现有所有事件类型，不变。
+| `intent_detected` | `intent`, `research_type`, `confidence` | 分流前发送 |
+| `search_results` | `results: [{title, url, snippet}]` | web_search 专用 |
+| `answer_chunk` | `content: str` | 非 deep_research 路径的流式内容 |
 
 ---
 
 ## 错误处理
 
-- IntentService 调用超时（>3s）或异常 → fallback `deep_research`，不中断请求
-- WebSearchService 失败 → 降级为 simple_qa（不带搜索结果直接回答）
-- LLM 调用失败 → yield `{"type": "error", "content": "..."}` 后结束
+| 场景 | 处理方式 |
+|---|---|
+| IntentService 超时（>3s）或异常 | fallback `deep_research`，继续执行 |
+| WebSearchService 失败 | 降级为不带搜索结果的 simple_qa |
+| LLM 调用失败 | `{"type": "error", "content": "..."}` 后结束 |
 
 ---
 
-## 不在本期范围内
+## 不在本期范围
 
+- `deep_research` 细分类型（`industry_analysis` / `company_research` / `comparative_analysis`）—— 架构已预留，后续加 enum 值即可
 - 多轮确认研究范围（Gemini Deep Research 风格）
 - 意图识别结果缓存
-- 前端 UI 按意图类型差异化展示（前端可自行根据 `intent_detected` 事件适配）
-- BERT 微调替换 few-shot（后续优化项）
+- BERT 微调替换 function calling
