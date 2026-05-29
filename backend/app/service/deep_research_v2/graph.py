@@ -510,9 +510,17 @@ class DeepResearchGraph:
 
         last_state: Dict[str, Any] = dict(state)
 
+        query = state.get("query", "")
+        trace_config = {
+            "run_name": f"research: {query[:40]}" if query else "research",
+            "metadata": {"session_id": session_id, "query": query},
+            "tags": ["deep_research_v3"] + ([session_id] if session_id else []),
+        }
+
         try:
             async for mode, chunk in self.graph.astream(
                 state,
+                config=trace_config,
                 stream_mode=["custom", "updates"],
             ):
                 if mode == "custom":
