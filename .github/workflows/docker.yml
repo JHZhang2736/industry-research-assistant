@@ -96,7 +96,7 @@ jobs:
         run: |
           ssh -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
             set -e
-            cd /opt/industry-research-assistant
+            cd ~/workspace/industry-research-assistant
             echo "=== Sync repo ==="
             git pull origin main
             echo "=== Pull new images ==="
