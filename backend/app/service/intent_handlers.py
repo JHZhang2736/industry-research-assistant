@@ -5,9 +5,11 @@
 返回空 dict（不需要修改 ResearchState）。
 """
 import os
+import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
+import requests
 from openai import AsyncOpenAI
 
 try:
@@ -46,31 +48,65 @@ def _make_llm_client() -> AsyncOpenAI:
 
 # ── LangGraph 节点函数 ────────────────────────────────────────────────────────
 
-async def web_search_node(state: Dict[str, Any]) -> Dict:
-    """网络搜索节点：Serper 搜索 + qwen-turbo 合成，流式输出。"""
-    try:
-        from app.service.web_search_service import WebSearchService
-        from app.service.config import ServiceConfig
-    except ImportError:
-        from service.web_search_service import WebSearchService
-        from service.config import ServiceConfig
+async def _bocha_search(query: str, count: int = 5) -> List[Dict[str, Any]]:
+    """调用 Bocha Web Search API，返回归一化的结果列表 [{title, url, snippet}]。
 
+    与 Scout 用的是同一个 Bocha 接口（复用 BOCHA_API_KEY），失败时返回空列表。
+    """
+    api_key = os.getenv("BOCHA_API_KEY", "")
+    if not api_key:
+        logger.warning("BOCHA_API_KEY 未配置，web_search 无法搜索")
+        return []
+    try:
+        resp = await asyncio.to_thread(
+            requests.post,
+            "https://api.bocha.cn/v1/web-search",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"query": query, "summary": True, "count": count, "freshness": "noLimit"},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.error(f"Bocha API error: {resp.status_code} - {resp.text[:200]}")
+            return []
+        data = resp.json()
+        if data.get("code") != 200:
+            logger.error(f"Bocha API returned error: {data.get('msg', 'Unknown error')}")
+            return []
+        webpages = data.get("data", {}).get("webPages", {}).get("value", [])
+        results = []
+        for item in webpages:
+            if item.get("url") and (item.get("snippet") or item.get("summary")):
+                results.append({
+                    "title": item.get("name", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("summary", "") or item.get("snippet", ""),
+                })
+        return results
+    except Exception as e:
+        logger.error(f"Bocha search error for '{query[:30]}': {e}")
+        return []
+
+
+async def web_search_node(state: Dict[str, Any]) -> Dict:
+    """网络搜索节点：Bocha 搜索 + qwen-turbo 合成，流式输出。"""
     writer = _get_writer()
     query = state.get("query", "")
 
-    # 1. 搜索
-    config = ServiceConfig.get_api_config()
-    svc = WebSearchService(api_key=config.get("serper_api_key"))
-    raw = svc.search(query, gl="cn", hl="zh-cn")
-    results = svc.extract_search_results(raw)[:5]
+    # 1. 搜索（复用 Scout 同款 Bocha 接口）
+    results = await _bocha_search(query, count=5)
 
     _emit(writer, {
         "type": "search_results",
         "results": [
-            {"title": r.get("title", ""), "url": r.get("link", ""), "snippet": r.get("snippet", "")}
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("snippet", "")}
             for r in results
         ],
     })
+
+    if not results:
+        _emit(writer, {"type": "answer_chunk", "content": "抱歉，没有搜索到相关的实时信息，请稍后再试或换个问法。"})
+        _emit(writer, {"type": "done"})
+        return {}
 
     # 2. LLM 合成（流式）
     context = "\n\n".join(
