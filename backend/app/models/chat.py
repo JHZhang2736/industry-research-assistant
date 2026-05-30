@@ -52,7 +52,6 @@ class ChatSession(Base):
     # 关系
     user = relationship("User", back_populates="sessions")
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
-    memories = relationship("LongTermMemory", back_populates="session")
     attachments = relationship("ChatAttachment", back_populates="session", cascade="all, delete-orphan")
 
 
@@ -74,19 +73,4 @@ class ChatMessage(Base):
     attachments = relationship("ChatAttachment", back_populates="message")
 
 
-class LongTermMemory(Base):
-    """长期记忆模型"""
-    __tablename__ = "long_term_memories"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
-    session_id = Column(UUID(as_uuid=True), ForeignKey("chat_sessions.id", ondelete="SET NULL"), nullable=True)
-    summary = Column(Text, nullable=False)  # 记忆摘要
-    key_insights = Column(JSONB)  # 关键洞察
-    milvus_ids = Column(ARRAY(Text))  # Milvus 中的向量 ID
-    token_count = Column(Integer)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # 关系
-    user = relationship("User", back_populates="memories")
-    session = relationship("ChatSession", back_populates="memories")

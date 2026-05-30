@@ -30,4 +30,4 @@ class User(Base):
     sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     knowledge_bases = relationship("KnowledgeBase", back_populates="user", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
-    memories = relationship("LongTermMemory", back_populates="user", cascade="all, delete-orphan")
+

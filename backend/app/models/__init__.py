@@ -1,7 +1,7 @@
 
 
 from .user import User
-from .chat import ChatSession, ChatMessage, ChatAttachment, LongTermMemory
+from .chat import ChatSession, ChatMessage, ChatAttachment
 from .knowledge import KnowledgeBase, Document
 from .industry_data import IndustryStats, CompanyData, PolicyData
 from .research import ResearchCheckpoint
@@ -11,7 +11,6 @@ __all__ = [
     "ChatSession",
     "ChatMessage",
     "ChatAttachment",
-    "LongTermMemory",
     "KnowledgeBase",
     "Document",
     "IndustryStats",

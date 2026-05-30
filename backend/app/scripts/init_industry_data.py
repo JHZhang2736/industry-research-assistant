@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from core.database import engine, Base
 # 导入所有模型以确保表被创建
 from models import (
-    User, ChatSession, ChatMessage, ChatAttachment, LongTermMemory,
+    User, ChatSession, ChatMessage, ChatAttachment,
     KnowledgeBase, Document, IndustryStats, CompanyData, PolicyData
 )
 
