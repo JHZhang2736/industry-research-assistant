@@ -11,7 +11,10 @@ import yaml
 
 from .base import BaseAgent
 from ..state import ResearchState
-from app.service.memory_engine import get_memory_engine, classify_industry
+try:
+    from service.memory_engine import get_memory_engine, classify_industry
+except ImportError:
+    from app.service.memory_engine import get_memory_engine, classify_industry
 
 logger = logging.getLogger("deep_research_v3.planner")
 

@@ -74,7 +74,10 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from config.llm_config import get_config
 
-from app.service.memory_engine import get_memory_engine, classify_industry
+try:
+    from service.memory_engine import get_memory_engine, classify_industry
+except ImportError:
+    from app.service.memory_engine import get_memory_engine, classify_industry
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("DeepResearchGraph")

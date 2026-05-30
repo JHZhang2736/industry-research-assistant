@@ -17,7 +17,10 @@ from datetime import datetime
 
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
-from app.service.memory_engine import get_memory_engine
+try:
+    from service.memory_engine import get_memory_engine
+except ImportError:
+    from app.service.memory_engine import get_memory_engine
 
 
 class LeadWriter(BaseAgent):
