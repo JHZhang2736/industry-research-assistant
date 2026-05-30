@@ -173,3 +173,42 @@ class MemoryEngine:
         except Exception as e:
             logger.warning(f"recall_lessons failed: {e}")
             return ""
+
+    # ── 供 router 列出/删除"我的记忆"────────────────────────
+    def list_memories(self, user_id: str) -> List[Dict[str, Any]]:
+        if not user_id:
+            return []
+        try:
+            ret = self._mem.get_all(user_id=user_id)
+            out = []
+            for it in _extract_results(ret):
+                out.append({
+                    "id": it.get("id", ""),
+                    "content": _memory_text(it),
+                    "type": (it.get("metadata") or {}).get("type", "unknown"),
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"list_memories failed: {e}")
+            return []
+
+    def delete_memory(self, memory_id: str) -> None:
+        try:
+            self._mem.delete(memory_id=memory_id)
+        except Exception as e:
+            logger.warning(f"delete_memory failed: {e}")
+
+
+_memory_engine: Optional["MemoryEngine"] = None
+
+
+def get_memory_engine() -> Optional["MemoryEngine"]:
+    """懒加载单例。初始化失败（如 mem0/Milvus 不可用）返回 None，调用方需判空。"""
+    global _memory_engine
+    if _memory_engine is None:
+        try:
+            _memory_engine = MemoryEngine()
+        except Exception as e:
+            logger.warning(f"MemoryEngine init failed, memory disabled: {e}")
+            return None
+    return _memory_engine

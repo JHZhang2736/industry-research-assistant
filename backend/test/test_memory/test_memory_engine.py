@@ -109,3 +109,26 @@ def test_recall_lessons_empty_returns_blank():
     engine = _make_engine_with_mock_mem()
     engine._mem.search.return_value = {"results": []}
     assert engine.recall_lessons("智慧交通", "q") == ""
+
+
+def test_list_memories_returns_normalized():
+    engine = _make_engine_with_mock_mem()
+    engine._mem.get_all.return_value = {
+        "results": [
+            {"id": "m1", "memory": "偏好A", "metadata": {"type": "preference"}},
+        ]
+    }
+    out = engine.list_memories("u1")
+    assert out == [{"id": "m1", "content": "偏好A", "type": "preference"}]
+
+
+def test_list_memories_swallows_errors():
+    engine = _make_engine_with_mock_mem()
+    engine._mem.get_all.side_effect = RuntimeError("down")
+    assert engine.list_memories("u1") == []
+
+
+def test_delete_memory_calls_mem():
+    engine = _make_engine_with_mock_mem()
+    engine.delete_memory("m1")
+    engine._mem.delete.assert_called_once_with(memory_id="m1")
