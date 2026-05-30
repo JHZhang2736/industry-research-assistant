@@ -208,3 +208,6 @@ backend/app/eval/.eval.db-*
 
 # Git worktrees (created by superpowers using-git-worktrees skill)
 .worktrees/
+
+# Intent eval results (local-only)
+backend/intent_eval_results/
