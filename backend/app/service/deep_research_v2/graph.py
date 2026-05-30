@@ -74,8 +74,35 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         from config.llm_config import get_config
 
+from app.service.memory_engine import get_memory_engine, classify_industry
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("DeepResearchGraph")
+
+_MEMORY_TASKS: set = set()  # 持有后台任务引用，防止被 GC
+
+
+def _writeback_research_memory(engine, state: dict) -> None:
+    """研究完成后写长期记忆：方法教训 + 用户偏好。best-effort、同步内部、外部用 create_task 包裹。"""
+    if engine is None:
+        return
+    user_id = state.get("user_id", "")
+    if not user_id:
+        return
+    try:
+        industry = classify_industry(state.get("query", ""))
+        engine.remember_lessons(
+            industry,
+            state.get("critic_feedback", []) or [],
+            state.get("quality_score", 0.0),
+        )
+        messages = state.get("messages", []) or []
+        conv = [m for m in messages if isinstance(m, dict) and m.get("role") and m.get("content")]
+        if not conv and state.get("query"):
+            conv = [{"role": "user", "content": state["query"]}]
+        engine.remember_preferences(user_id, conv)
+    except Exception:
+        pass
 
 
 def _update_root_run_tags(root_run_id, base_tags, intent=None, research_type=None) -> None:
@@ -766,6 +793,16 @@ class DeepResearchGraph:
                 logger.debug(f"update_status(completed) failed (non-fatal): {e}")
 
         yield self._build_completion_event(last_state)
+
+        # 研究完成：后台写长期记忆，不阻塞响应
+        try:
+            _t = asyncio.create_task(
+                asyncio.to_thread(_writeback_research_memory, get_memory_engine(), last_state)
+            )
+            _MEMORY_TASKS.add(_t)
+            _t.add_done_callback(_MEMORY_TASKS.discard)
+        except Exception:
+            pass
 
     def _tag_root(self, root_run_id, base_tags, last_state, extra_tags=None):
         """从最终 state 提取 intent/research_type，给根 run 补写标签。
