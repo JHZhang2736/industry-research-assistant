@@ -70,7 +70,16 @@ class MemoryEngine:
 
     def __init__(self) -> None:
         from mem0 import Memory
-        self._mem = Memory.from_config(self._build_config())
+        cfg = self._build_config()
+        # mem0 的 OpenAI LLM 一旦检测到 OPENROUTER_API_KEY 环境变量，就优先走 OpenRouter，
+        # 无视我们传入的 DashScope 配置（导致 LLM 抽取 401）。构建期间临时摘除该变量，
+        # 让 LLM client 固定用 DashScope；构建完成后恢复，不影响 app 其它地方。
+        _saved_or = os.environ.pop("OPENROUTER_API_KEY", None)
+        try:
+            self._mem = Memory.from_config(cfg)
+        finally:
+            if _saved_or is not None:
+                os.environ["OPENROUTER_API_KEY"] = _saved_or
 
     @staticmethod
     def _build_config() -> Dict[str, Any]:
@@ -85,6 +94,9 @@ class MemoryEngine:
                     "embedding_model_dims": 1024,
                     "url": milvus_uri,
                     "metric_type": "COSINE",
+                    # mem0 2.0.4 的 MilvusDBConfig.token 类型是 str 却默认 None，
+                    # 加载已有集合时会拿 None 去校验导致 pydantic 报错；显式传空串规避（本地无需 auth）。
+                    "token": "",
                 },
             },
             "llm": {
@@ -122,7 +134,7 @@ class MemoryEngine:
         if not user_id or not query:
             return ""
         try:
-            ret = self._mem.search(query, user_id=user_id, limit=k)
+            ret = self._mem.search(query, filters={"user_id": user_id}, top_k=k)
             items = [
                 _memory_text(it)
                 for it in _extract_results(ret)
@@ -161,10 +173,13 @@ class MemoryEngine:
             if not text:
                 continue
             try:
+                # infer=False：教训是已提炼好的规范，原样存储；不让 mem0 再做 LLM 抽取
+                # （抽取会判定"无个人事实可记"而丢弃，导致 SOP 层存不进东西）。
                 self._mem.add(
                     [{"role": "user", "content": text}],
                     user_id=scope,
                     metadata={"type": "sop", "issue_type": fb.get("issue_type", "issue")},
+                    infer=False,
                 )
             except Exception as e:
                 logger.warning(f"remember_lessons add failed: {e}")
@@ -176,7 +191,7 @@ class MemoryEngine:
             return ""
         scope = self._sop_scope(industry)
         try:
-            ret = self._mem.search(query, user_id=scope, limit=k)
+            ret = self._mem.search(query, filters={"user_id": scope}, top_k=k)
             items = [
                 _memory_text(it)
                 for it in _extract_results(ret)
@@ -196,7 +211,7 @@ class MemoryEngine:
         if not user_id:
             return []
         try:
-            ret = self._mem.get_all(user_id=user_id)
+            ret = self._mem.get_all(filters={"user_id": user_id})
             out = []
             for it in _extract_results(ret):
                 out.append({

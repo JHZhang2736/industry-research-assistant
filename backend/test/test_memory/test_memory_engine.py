@@ -38,6 +38,8 @@ def test_recall_preferences_formats_context():
     assert "[用户偏好]" in ctx
     assert "用户只关注智慧交通" in ctx
     assert "报告要简洁" in ctx
+    # 锁定 mem0 2.0.4 真实 search API：filters/top_k（不是 user_id/limit）
+    engine._mem.search.assert_called_once_with("写一份报告", filters={"user_id": "u1"}, top_k=5)
 
 
 def test_recall_preferences_handles_list_shape():
@@ -76,6 +78,8 @@ def test_remember_lessons_adds_per_feedback():
     assert kwargs["user_id"] == "sop::智慧交通"
     assert kwargs["metadata"]["type"] == "sop"
     assert kwargs["metadata"]["issue_type"] == "missing_source"
+    # 教训需原样存储：infer=False（否则 mem0 LLM 抽取会判"无事实可记"而丢弃）
+    assert kwargs["infer"] is False
 
 
 def test_remember_lessons_skips_when_empty():
@@ -120,6 +124,8 @@ def test_list_memories_returns_normalized():
     }
     out = engine.list_memories("u1")
     assert out == [{"id": "m1", "content": "偏好A", "type": "preference"}]
+    # 锁定 mem0 2.0.4 真实 get_all API：filters（不是 user_id）
+    engine._mem.get_all.assert_called_once_with(filters={"user_id": "u1"})
 
 
 def test_list_memories_swallows_errors():
