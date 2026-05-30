@@ -57,3 +57,55 @@ def test_recall_preferences_swallows_errors():
     engine = _make_engine_with_mock_mem()
     engine._mem.search.side_effect = RuntimeError("boom")
     assert engine.recall_preferences("u1", "q") == ""
+
+
+def _critic_feedback_sample():
+    return [
+        {"issue_type": "missing_source", "severity": "critical",
+         "description": "渗透率数据无官方来源", "suggestion": "补充国家统计局口径"},
+        {"issue_type": "outdated", "severity": "minor",
+         "description": "引用了2019年数据", "suggestion": "更新到最近年份"},
+    ]
+
+
+def test_remember_lessons_adds_per_feedback():
+    engine = _make_engine_with_mock_mem()
+    engine.remember_lessons("智慧交通", _critic_feedback_sample(), quality_score=6.0)
+    assert engine._mem.add.call_count == 2
+    kwargs = engine._mem.add.call_args_list[0].kwargs
+    assert kwargs["user_id"] == "sop::智慧交通"
+    assert kwargs["metadata"]["type"] == "sop"
+    assert kwargs["metadata"]["issue_type"] == "missing_source"
+
+
+def test_remember_lessons_skips_when_empty():
+    engine = _make_engine_with_mock_mem()
+    engine.remember_lessons("智慧交通", [], quality_score=9.0)
+    engine._mem.add.assert_not_called()
+
+
+def test_remember_lessons_swallows_errors():
+    engine = _make_engine_with_mock_mem()
+    engine._mem.add.side_effect = RuntimeError("down")
+    engine.remember_lessons("智慧交通", _critic_feedback_sample(), 5.0)
+
+
+def test_recall_lessons_filters_by_type_and_recurrence():
+    engine = _make_engine_with_mock_mem()
+    engine._mem.search.return_value = {
+        "results": [
+            {"memory": "政策类结论必须引用原文", "metadata": {"type": "sop"}, "score": 0.9},
+            {"memory": "渗透率必须标注口径", "metadata": {"type": "sop"}, "score": 0.8},
+            {"memory": "无关偏好", "metadata": {"type": "preference"}, "score": 0.7},
+        ]
+    }
+    ctx = engine.recall_lessons("智慧交通", "市场规模", k=5, min_recurrence=1)
+    assert "[过往研究教训" in ctx
+    assert "政策类结论必须引用原文" in ctx
+    assert "无关偏好" not in ctx
+
+
+def test_recall_lessons_empty_returns_blank():
+    engine = _make_engine_with_mock_mem()
+    engine._mem.search.return_value = {"results": []}
+    assert engine.recall_lessons("智慧交通", "q") == ""

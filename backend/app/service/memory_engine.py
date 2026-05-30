@@ -121,3 +121,55 @@ class MemoryEngine:
         except Exception as e:
             logger.warning(f"recall_preferences failed: {e}")
             return ""
+
+    # ── 方法规范层（scope = "sop::{industry}"）───────────────
+    @staticmethod
+    def _sop_scope(industry: str) -> str:
+        return f"sop::{industry or 'general'}"
+
+    @staticmethod
+    def _lesson_text(fb: Dict[str, Any]) -> str:
+        """把一条 CriticFeedback 提炼成可复用的"研究教训"文本。"""
+        issue = fb.get("issue_type", "issue")
+        desc = fb.get("description", "")
+        sugg = fb.get("suggestion", "")
+        return f"教训({issue}): {desc} → 改进: {sugg}".strip()
+
+    def remember_lessons(self, industry: str, critic_feedback: List[Dict[str, Any]],
+                         quality_score: float) -> None:
+        if not critic_feedback:
+            return
+        scope = self._sop_scope(industry)
+        for fb in critic_feedback:
+            text = self._lesson_text(fb)
+            if not text:
+                continue
+            try:
+                self._mem.add(
+                    [{"role": "user", "content": text}],
+                    user_id=scope,
+                    metadata={"type": "sop", "issue_type": fb.get("issue_type", "issue")},
+                )
+            except Exception as e:
+                logger.warning(f"remember_lessons add failed: {e}")
+
+    def recall_lessons(self, industry: str, query: str, k: int = 5,
+                       min_recurrence: int = 2) -> str:
+        if not query:
+            return ""
+        scope = self._sop_scope(industry)
+        try:
+            ret = self._mem.search(query, user_id=scope, limit=k)
+            items = [
+                _memory_text(it)
+                for it in _extract_results(ret)
+                if (it.get("metadata") or {}).get("type") == "sop"
+            ]
+            items = [t for t in items if t]
+            if not items:
+                return ""
+            lines = ["[过往研究教训（请在规划时主动规避）]"] + [f"- {t}" for t in items] + [""]
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning(f"recall_lessons failed: {e}")
+            return ""
