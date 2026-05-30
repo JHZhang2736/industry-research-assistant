@@ -153,6 +153,7 @@ class ResearchState(TypedDict):
     query: str                              # 用户原始问题
     session_id: str                         # 会话ID
     user_id: str                            # 用户ID（记忆读写用）
+    recalled_memory: Dict[str, Any]         # 召回的长期记忆 {preferences, lessons}（Planner 写入；checkpoint/LangSmith 可见）
     phase: str                              # 当前阶段
     iteration: int                          # 当前迭代轮次
     max_iterations: int                     # 最大迭代次数
@@ -224,6 +225,7 @@ def create_initial_state(
         query=query,
         session_id=session_id,
         user_id=user_id,
+        recalled_memory={},
         phase=ResearchPhase.INIT.value,
         iteration=0,
         max_iterations=3,

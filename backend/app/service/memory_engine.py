@@ -34,6 +34,19 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger("memory_engine")
 
+# LangSmith traceable：让每次记忆读写在 trace 树里成为独立 span（LANGSMITH_TRACING=true 时上报）。
+# 未安装 langsmith 时退化为 no-op，兼容 @traceable 与 @traceable(...) 两种写法。
+try:
+    from langsmith import traceable
+except ImportError:  # pragma: no cover
+    def traceable(*d_args, **d_kwargs):
+        if len(d_args) == 1 and callable(d_args[0]) and not d_kwargs:
+            return d_args[0]
+
+        def _wrap(fn):
+            return fn
+        return _wrap
+
 
 def _extract_results(search_ret: Any) -> List[Dict[str, Any]]:
     """兼容 mem0 search 的两种返回形状：{"results": [...]} 或裸 list。"""
@@ -95,6 +108,7 @@ class MemoryEngine:
         }
 
     # ── 偏好层（scope = user_id）─────────────────────────────
+    @traceable(run_type="tool", name="memory.remember_preferences")
     def remember_preferences(self, user_id: str, messages: List[Dict[str, Any]]) -> None:
         if not user_id or not messages:
             return
@@ -103,6 +117,7 @@ class MemoryEngine:
         except Exception as e:
             logger.warning(f"remember_preferences failed: {e}")
 
+    @traceable(run_type="retriever", name="memory.recall_preferences")
     def recall_preferences(self, user_id: str, query: str, k: int = 5) -> str:
         if not user_id or not query:
             return ""
@@ -135,6 +150,7 @@ class MemoryEngine:
         sugg = fb.get("suggestion", "")
         return f"教训({issue}): {desc} → 改进: {sugg}".strip()
 
+    @traceable(run_type="tool", name="memory.remember_lessons")
     def remember_lessons(self, industry: str, critic_feedback: List[Dict[str, Any]],
                          quality_score: float) -> None:
         if not critic_feedback:
@@ -153,6 +169,7 @@ class MemoryEngine:
             except Exception as e:
                 logger.warning(f"remember_lessons add failed: {e}")
 
+    @traceable(run_type="retriever", name="memory.recall_lessons")
     def recall_lessons(self, industry: str, query: str, k: int = 5,
                        min_recurrence: int = 2) -> str:
         if not query:
