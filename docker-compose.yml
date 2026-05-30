@@ -76,7 +76,7 @@ services:
 
   milvus-standalone:
     container_name: industry-milvus-standalone
-    image: milvusdb/milvus:v2.4.15
+    image: milvusdb/milvus:v2.5.4
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: milvus-etcd:2379
