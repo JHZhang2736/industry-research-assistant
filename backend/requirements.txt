@@ -69,3 +69,6 @@ tenacity>=8.2
 rich>=13.0
 pytest-asyncio>=0.23
 aresponses>=3.0
+
+# Memory
+mem0ai==2.0.4
