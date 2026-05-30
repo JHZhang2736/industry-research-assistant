@@ -15,7 +15,7 @@ from .document_service import DocumentService
 from .web_search_service import WebSearchService
 from .session_service import SessionService
 from .memory_engine import get_memory_engine
-from .context_compressor import ContextCompressor, estimate_tokens
+from .context_compressor import ContextCompressor
 
 
 class ChatService:
