@@ -15,12 +15,13 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-# 加载 backend/.env，让本地 `python -m app.intent_eval.run_eval` 不经 FastAPI 主入口
-# 也能拿到 DASHSCOPE_API_KEY。load_dotenv 幂等且不覆盖已存在的 os.environ，shell 导出仍优先。
-# CI 通过 env 注入密钥，无 .env 文件时这里静默跳过。
+# 加载仓库根目录的 .env，让本地 `python -m app.intent_eval.run_eval` 不经 FastAPI
+# 主入口也能拿到 DASHSCOPE_API_KEY。load_dotenv 幂等且不覆盖已存在的 os.environ，
+# shell 导出仍优先。CI 通过 env 注入密钥，无 .env 文件时这里静默跳过。
 try:
     from dotenv import load_dotenv as _load_dotenv
-    _ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
+    # run_eval.py = backend/app/intent_eval/run_eval.py，向上四级即仓库根目录
+    _ENV_PATH = Path(__file__).resolve().parents[3] / ".env"
     if _ENV_PATH.exists():
         _load_dotenv(_ENV_PATH)
 except ImportError:
