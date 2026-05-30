@@ -46,6 +46,8 @@ class ChatSession(Base):
     session_type = Column(String(50), default="chat")  # chat, deepsearch
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    context_summary = Column(Text)            # 滚动压缩的历史摘要
+    summarized_up_to = Column(Integer, default=0)  # 已压缩到第几条消息
 
     # 关系
     user = relationship("User", back_populates="sessions")
