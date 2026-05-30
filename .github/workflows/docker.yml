@@ -38,6 +38,10 @@ jobs:
         with:
           context: ./backend
           push: true
+          # 关闭 provenance/SBOM attestation：否则推成 OCI manifest index，
+          # ECS 上 docker compose pull 会把 0B 的证明清单当镜像拉 → "error from registry: unknown error"
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=jhzhang2736/industry-research-assistant-backend:buildcache
@@ -72,6 +76,9 @@ jobs:
         with:
           context: ./frontend
           push: true
+          # 同 backend：关闭 attestation，避免 OCI index 导致 compose pull 失败
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=jhzhang2736/industry-research-assistant-frontend:buildcache

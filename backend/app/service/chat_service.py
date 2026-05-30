@@ -14,7 +14,8 @@ import tiktoken
 from .document_service import DocumentService
 from .web_search_service import WebSearchService
 from .session_service import SessionService
-from .memory_service import get_memory_service
+from .memory_engine import get_memory_engine
+from .context_compressor import ContextCompressor
 
 
 class ChatService:
@@ -271,26 +272,36 @@ class ChatService:
             # 获取历史对话（不包含当前问题）
             history_messages = self.session_service.get_messages_for_prompt(session_id)
 
-        # 格式化历史对话
+        # 格式化历史对话（超阈值滚动压缩，保留最近 K 轮）
+        history_context = ""
         if history_messages:
-            # 注意：history_messages已经按时间顺序排列，最近的对话在后面
-            history_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history_messages])
-            history_context = f"\n\n历史对话（最近的对话内容更重要）：\n{history_text}"
-        else:
-            history_context = ""
+            def _summarize(text: str) -> str:
+                resp = OpenAI(api_key=self.openai_api_key, base_url=self.openai_base_url).chat.completions.create(
+                    model=self.openai_model,
+                    messages=[{"role": "user", "content": f"用3-5句话压缩以下对话，保留关键事实与结论：\n{text}"}],
+                )
+                return resp.choices[0].message.content.strip()
 
-        # 获取长期记忆上下文
+            _compressor = ContextCompressor(
+                keep_recent_turns=4, compress_threshold=6000, summarize_fn=_summarize
+            )
+            _prior = getattr(self, "_session_summary", {}).get(session_id, ("", 0)) if session_id else ("", 0)
+            _hist, _new_summary, _cursor = _compressor.build_history(
+                prior_summary=_prior[0], summarized_up_to=_prior[1], messages=history_messages
+            )
+            history_context = f"\n\n历史对话：\n{_hist}"
+            # 进程内缓存滚动摘要（演示足够；持久化见后续增强）
+            if session_id:
+                if not hasattr(self, "_session_summary"):
+                    self._session_summary = {}
+                self._session_summary[session_id] = (_new_summary, _cursor)
+
+        # 获取长期记忆上下文（mem0 偏好层）
         memory_context = ""
         if user_id:
-            try:
-                memory_service = get_memory_service()
-                memory_context = memory_service.build_memory_context(
-                    user_id=user_id,
-                    current_query=question,
-                    max_memories=3
-                )
-            except Exception as e:
-                print(f"获取长期记忆失败: {e}")
+            _engine = get_memory_engine()
+            if _engine is not None:
+                memory_context = _engine.recall_preferences(user_id, question)
 
         prompt = f"""你是一个智能助手，负责根据用户的问题和提供的参考内容生成回答。请严格按照以下要求生成回答：
 1. 回答必须基于提供的参考内容。

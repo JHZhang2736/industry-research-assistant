@@ -23,7 +23,7 @@ from router.database_router import router as database_router
 from core.database import engine, Base
 # 导入所有模型以确保它们被注册
 from models import (
-    User, ChatSession, ChatMessage, ChatAttachment, LongTermMemory,
+    User, ChatSession, ChatMessage, ChatAttachment,
     KnowledgeBase, Document, IndustryStats, CompanyData, PolicyData,
     ResearchCheckpoint
 )

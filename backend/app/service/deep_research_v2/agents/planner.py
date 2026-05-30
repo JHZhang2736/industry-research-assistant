@@ -11,8 +11,40 @@ import yaml
 
 from .base import BaseAgent
 from ..state import ResearchState
+try:
+    from service.memory_engine import get_memory_engine, classify_industry
+except ImportError:
+    from app.service.memory_engine import get_memory_engine, classify_industry
 
 logger = logging.getLogger("deep_research_v3.planner")
+
+
+def _recall_memory(engine, user_id: str, query: str) -> Dict[str, str]:
+    """召回结构化长期记忆：{"preferences": str, "lessons": str}。best-effort。
+
+    返回结构化 dict（而非拼好的字符串），便于写入 state 供 checkpoint 持久化与
+    LangSmith 观测；prompt 前缀由 _format_memory_prefix 单独组装。
+    """
+    if engine is None or not user_id:
+        return {"preferences": "", "lessons": ""}
+    try:
+        return {
+            "preferences": engine.recall_preferences(user_id, query) or "",
+            "lessons": engine.recall_lessons(classify_industry(query), query) or "",
+        }
+    except Exception:
+        return {"preferences": "", "lessons": ""}
+
+
+def _format_memory_prefix(recalled: Dict[str, str]) -> str:
+    """把结构化记忆拼成注入 prompt 的前缀。"""
+    blocks = [b for b in (recalled.get("preferences", ""), recalled.get("lessons", "")) if b]
+    return ("\n".join(blocks) + "\n") if blocks else ""
+
+
+def _build_memory_prefix(engine, user_id: str, query: str) -> str:
+    """组装注入 Planner 的记忆前缀：用户偏好 + 本行业历史教训。best-effort。"""
+    return _format_memory_prefix(_recall_memory(engine, user_id, query))
 
 
 def _load_research_skill(research_type: str) -> dict:
@@ -168,6 +200,15 @@ class Planner(BaseAgent):
             if outline_hint:
                 user_prompt += f"\n\n{outline_hint}"
 
+            # 召回长期记忆（偏好 + 历史教训）：一次召回，写入 state 供 checkpoint/LangSmith，
+            # 同时拼成前缀注入 prompt
+            recalled_memory = _recall_memory(
+                get_memory_engine(), state.get("user_id", ""), query
+            )
+            mem_prefix = _format_memory_prefix(recalled_memory)
+            if mem_prefix:
+                user_prompt = f"{mem_prefix}\n{user_prompt}"
+
             response = await self.call_llm(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -189,7 +230,7 @@ class Planner(BaseAgent):
             plan = self._enforce_plan_topology(plan)
 
             self.add_message(state, "plan_ready", f"📋 生成 {len(outline)} 章节 / {len(plan)} 个执行步骤")
-            return {"outline": outline, "plan": plan}
+            return {"outline": outline, "plan": plan, "recalled_memory": recalled_memory}
 
         except Exception as e:
             logger.warning(f"Planner LLM failed, using fallback template: {e}")
