@@ -612,7 +612,8 @@ class DeepResearchGraph:
             state = create_initial_state(
                 query, session_id,
                 search_web=search_web,
-                search_local=search_local
+                search_local=search_local,
+                user_id=user_id or ""
             )
             state["max_iterations"] = self.max_iterations
 

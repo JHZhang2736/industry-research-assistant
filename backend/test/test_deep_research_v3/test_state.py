@@ -82,3 +82,13 @@ def test_research_state_backward_compat():
                 "charts", "draft_sections", "final_report", "references",
                 "critic_feedback", "quality_score", "messages", "logs"]:
         assert key in state, f"backward-compat field {key} missing"
+
+
+def test_research_state_has_user_id():
+    state = create_initial_state(query="q", session_id="s", user_id="u1")
+    assert state["user_id"] == "u1"
+
+
+def test_research_state_user_id_defaults_empty():
+    state = create_initial_state(query="q", session_id="s")
+    assert state["user_id"] == ""
