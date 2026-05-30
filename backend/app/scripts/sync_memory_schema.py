@@ -3,6 +3,8 @@ create_all 不会 ALTER 既有表，故手动执行。幂等。
 
 运行：python -m app.scripts.sync_memory_schema
 """
+from dotenv import load_dotenv
+load_dotenv()  # 必须在导入 engine 之前：core.database 在 import 时即读取 os.getenv 的 PG 配置
 from sqlalchemy import text
 try:
     from app.core.database import engine
