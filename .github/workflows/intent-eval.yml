@@ -1,0 +1,43 @@
+name: Intent Eval
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Dataset name (without .jsonl)'
+        default: 'intent_eval_v1'
+        required: true
+      concurrency:
+        description: 'Parallel runs'
+        default: '10'
+        required: true
+
+jobs:
+  intent-eval:
+    name: Run intent eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      LLM_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Run intent eval
+        working-directory: backend
+        run: |
+          python -m app.intent_eval.run_eval \
+            --dataset app/intent_eval/datasets/${{ inputs.dataset }}.jsonl \
+            --concurrency ${{ inputs.concurrency }} \
+            --no-db
+      - name: Upload markdown report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: intent-eval-report
+          path: backend/intent_eval_results/*.md
