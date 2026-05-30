@@ -1,6 +1,5 @@
 """SQLite 持久化单测：写一个 run + cases，读回来字段一致。"""
 import sqlite3
-from pathlib import Path
 from app.intent_eval.storage import Storage
 from app.intent_eval.types import (
     EvalCase, CaseResult, PerClassMetrics, LevelMetrics, RunSummary,

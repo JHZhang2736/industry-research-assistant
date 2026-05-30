@@ -1,8 +1,7 @@
 """Markdown 报表生成测试。"""
-from pathlib import Path
 from app.intent_eval.reporter import write_markdown, _escape_pipe
 from app.intent_eval.types import (
-    EvalCase, CaseResult, PerClassMetrics, LevelMetrics, RunSummary, ERROR_LABEL,
+    EvalCase, CaseResult, RunSummary,
 )
 from app.intent_eval.metrics import compute_level_metrics
 
