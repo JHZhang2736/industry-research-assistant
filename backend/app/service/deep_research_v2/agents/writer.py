@@ -17,6 +17,7 @@ from datetime import datetime
 
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
+from app.service.memory_engine import get_memory_engine
 
 
 class LeadWriter(BaseAgent):
@@ -349,6 +350,13 @@ class LeadWriter(BaseAgent):
             insights="\n".join([f"- {i}" for i in state["insights"][:5]]) if state["insights"] else "（暂无洞察）",
             charts_info="\n".join(charts_info) if charts_info else "（暂无图表）"
         )
+
+        # 注入用户写作偏好（best-effort）
+        _engine = get_memory_engine()
+        if _engine is not None:
+            _pref = _engine.recall_preferences(state.get("user_id", ""), state["query"])
+            if _pref:
+                prompt = f"{_pref}\n{prompt}"
 
         response = await self.call_llm(
             system_prompt="你是顶级的行业研究分析师，擅长撰写专业的研究报告。",

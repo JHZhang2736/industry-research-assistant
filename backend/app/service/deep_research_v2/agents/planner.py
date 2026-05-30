@@ -11,8 +11,22 @@ import yaml
 
 from .base import BaseAgent
 from ..state import ResearchState
+from app.service.memory_engine import get_memory_engine, classify_industry
 
 logger = logging.getLogger("deep_research_v3.planner")
+
+
+def _build_memory_prefix(engine, user_id: str, query: str) -> str:
+    """组装注入 Planner 的记忆前缀：用户偏好 + 本行业历史教训。best-effort。"""
+    if engine is None or not user_id:
+        return ""
+    try:
+        pref = engine.recall_preferences(user_id, query)
+        lessons = engine.recall_lessons(classify_industry(query), query)
+        blocks = [b for b in (pref, lessons) if b]
+        return ("\n".join(blocks) + "\n") if blocks else ""
+    except Exception:
+        return ""
 
 
 def _load_research_skill(research_type: str) -> dict:
@@ -167,6 +181,13 @@ class Planner(BaseAgent):
             user_prompt = f"研究问题：{query}"
             if outline_hint:
                 user_prompt += f"\n\n{outline_hint}"
+
+            # 注入长期记忆（偏好 + 历史教训）
+            mem_prefix = _build_memory_prefix(
+                get_memory_engine(), state.get("user_id", ""), query
+            )
+            if mem_prefix:
+                user_prompt = f"{mem_prefix}\n{user_prompt}"
 
             response = await self.call_llm(
                 system_prompt=system_prompt,
