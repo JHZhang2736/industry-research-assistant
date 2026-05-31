@@ -141,10 +141,23 @@ jobs:
             cd ~/workspace/industry-research-assistant
             echo "=== Sync repo ==="
             git pull origin main
+            # 镜像拉取重试：网络抖动 / registry 偶发失败时最多尝试 5 次（间隔 10s）
+            retry() {
+              local n=1 max=5 delay=10
+              until "$@"; do
+                if [ $n -ge $max ]; then
+                  echo "[retry] 仍失败（已尝试 $max 次）: $*" >&2
+                  return 1
+                fi
+                echo "[retry] 第 $n/$max 次失败，${delay}s 后重试: $*"
+                n=$((n + 1))
+                sleep $delay
+              done
+            }
             echo "=== Pull new images ==="
-            docker compose pull backend frontend
+            retry docker compose pull backend frontend
             echo "=== Pull sandbox image ==="
-            docker pull jhzhang2736/industry-research-assistant-sandbox:latest
+            retry docker pull jhzhang2736/industry-research-assistant-sandbox:latest
             echo "=== Restart stack ==="
             docker compose up -d --remove-orphans
             echo "=== Status ==="
