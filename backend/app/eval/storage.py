@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app.eval.artifacts import artifact_to_dict
 from app.eval.types import CaseResult
 
 logger = logging.getLogger("eval.storage")
@@ -47,6 +48,28 @@ CREATE TABLE IF NOT EXISTS evaluator_scores (
     low_confidence INTEGER,
     metadata_json TEXT,
     PRIMARY KEY (run_id, case_id, evaluator_name)
+);
+
+CREATE TABLE IF NOT EXISTS eval_artifacts (
+    run_id TEXT,
+    case_id TEXT,
+    artifact_json TEXT,
+    PRIMARY KEY (run_id, case_id)
+);
+
+CREATE TABLE IF NOT EXISTS claim_verdicts (
+    run_id TEXT,
+    case_id TEXT,
+    claim_id TEXT,
+    section_id TEXT,
+    claim_text TEXT,
+    supported INTEGER,
+    reason TEXT,
+    evidence_ids_json TEXT,
+    citation_ids_json TEXT,
+    requirement_ids_json TEXT,
+    importance TEXT,
+    PRIMARY KEY (run_id, case_id, claim_id)
 );
 """
 
@@ -136,3 +159,45 @@ class EvalStorage:
                         json.dumps(r.metadata, ensure_ascii=False),
                     ),
                 )
+
+            artifact = case_result.artifact
+            c.execute(
+                "DELETE FROM eval_artifacts WHERE run_id=? AND case_id=?",
+                (run_id, c_id),
+            )
+            c.execute(
+                "DELETE FROM claim_verdicts WHERE run_id=? AND case_id=?",
+                (run_id, c_id),
+            )
+            if artifact is not None:
+                c.execute(
+                    "INSERT OR REPLACE INTO eval_artifacts "
+                    "(run_id, case_id, artifact_json) VALUES (?, ?, ?)",
+                    (
+                        run_id,
+                        c_id,
+                        json.dumps(artifact_to_dict(artifact), ensure_ascii=False),
+                    ),
+                )
+                verdict_by_claim = {v.claim_id: v for v in artifact.verdicts}
+                for claim in artifact.claims:
+                    verdict = verdict_by_claim.get(claim.id)
+                    c.execute(
+                        "INSERT INTO claim_verdicts "
+                        "(run_id, case_id, claim_id, section_id, claim_text, supported, reason, "
+                        "evidence_ids_json, citation_ids_json, requirement_ids_json, importance) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            run_id,
+                            c_id,
+                            claim.id,
+                            claim.section_id,
+                            claim.text,
+                            1 if verdict is not None and verdict.supported else 0,
+                            verdict.reason if verdict is not None else "missing verdict",
+                            json.dumps(verdict.evidence_ids if verdict is not None else [], ensure_ascii=False),
+                            json.dumps(claim.citation_ids, ensure_ascii=False),
+                            json.dumps(claim.requirement_ids, ensure_ascii=False),
+                            claim.importance,
+                        ),
+                    )

@@ -16,8 +16,9 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from app.eval.evaluators import build_all_evaluators
+from app.eval.artifact_builder import EvalArtifactBuilder
 from app.eval.langsmith_adapter import LangSmithAdapter
+from app.eval.metric_calculator import MetricCalculator
 from app.eval.reporter import Reporter
 from app.eval.settings import DEFAULT_RESEARCH_TIMEOUT_SEC, LANGSMITH_PROJECT
 from app.eval.storage import EvalStorage
@@ -41,7 +42,8 @@ class EvalRunner:
         self.service = service
         self.load_final_state = load_final_state
         self.judge = judge
-        self.evaluators = build_all_evaluators()
+        self.artifact_builder = EvalArtifactBuilder()
+        self.metric_calculator = MetricCalculator()
         self.storage = EvalStorage(db_path)
         self.storage.init_schema()
         self.reporter = Reporter(out_dir)
@@ -121,23 +123,9 @@ class EvalRunner:
                 finished_at=finished,
             )
 
-            # Phase B: run all evaluators
-            results = await asyncio.gather(
-                *[ev.evaluate(ctx, self.judge) for ev in self.evaluators],
-                return_exceptions=True,
-            )
-
-            from app.eval.types import EvalResult
-            ev_results: list[EvalResult] = []
-            for ev, r in zip(self.evaluators, results):
-                if isinstance(r, EvalResult):
-                    ev_results.append(r)
-                else:
-                    ev_results.append(EvalResult(
-                        evaluator_name=ev.name,
-                        score=None,
-                        error=str(r),
-                    ))
+            # Phase B: build claim-centered artifact and derive metrics
+            artifact = await self.artifact_builder.build(ctx, self.judge)
+            ev_results = self.metric_calculator.calculate(ctx, artifact)
 
             any_score = any(r.score is not None for r in ev_results)
             cr = CaseResult(
@@ -146,6 +134,7 @@ class EvalRunner:
                 ok=any_score,
                 error=None if any_score else "all evaluators returned None/error",
                 state=state,
+                artifact=artifact,
                 started_at=started,
                 finished_at=finished,
             )

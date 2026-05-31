@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from app.eval.artifacts import AtomicClaim, ClaimVerdict, EvalArtifact
 from app.eval.reporter import Reporter
 from app.eval.types import CaseResult, EvalCase, EvalResult
 
@@ -87,3 +88,148 @@ def test_reporter_escapes_pipe_in_query(tmp_path: Path):
     )
     md = Path(paths["markdown"]).read_text(encoding="utf-8")
     assert "A \\| B sector" in md  # escaped pipe
+
+
+def test_reporter_groups_claim_centered_scores(tmp_path: Path):
+    cases = [
+        make_case_result(
+            "q001",
+            {
+                "claim_support_rate": 5.0,
+                "coherence": 8.0,
+                "decision_usefulness": 7.0,
+                "cost": 0.34,
+            },
+        ),
+    ]
+    r = Reporter(out_dir=str(tmp_path))
+    paths = r.write(
+        run_id="run-groups",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=cases,
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "## Score Groups" in md
+    assert "### Information Fidelity" in md
+    assert "claim_support_rate" in md
+    assert "### Report Quality" in md
+    assert "coherence" in md
+    assert "decision_usefulness" in md
+    assert "### Agentic / Operational" in md
+    assert "cost" in md
+
+
+def test_reporter_includes_claim_diagnostics(tmp_path: Path):
+    case = make_case_result("q001", {"claim_support_rate": 5.0, "coherence": 8.0})
+    case.artifact = EvalArtifact(
+        claims=[
+            AtomicClaim(
+                id="c1",
+                text="Unsupported market claim.",
+                section_id="s1",
+                importance="high",
+                citation_ids=["1"],
+            ),
+            AtomicClaim(
+                id="c2",
+                text="Supported claim.",
+                section_id="s1",
+                importance="medium",
+                citation_ids=["2"],
+            ),
+        ],
+        verdicts=[
+            ClaimVerdict(
+                claim_id="c1",
+                supported=False,
+                reason="No matching evidence.",
+                evidence_ids=[],
+            ),
+            ClaimVerdict(
+                claim_id="c2",
+                supported=True,
+                reason="Supported.",
+                evidence_ids=["f1"],
+            ),
+        ],
+        errors=[],
+    )
+    r = Reporter(out_dir=str(tmp_path))
+    paths = r.write(
+        run_id="run-claim",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=[case],
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "## Claim Diagnostics" in md
+    assert "Unsupported market claim." in md
+    assert "No matching evidence." in md
+    diagnostics = md.split("## Claim Diagnostics", 1)[1]
+    assert "/ `c2`" not in diagnostics
+
+
+def test_reporter_handles_low_confidence_without_std(tmp_path: Path):
+    case = make_case_result("q001", {"coherence": 8.0})
+    case.results[0].low_confidence = True
+    r = Reporter(out_dir=str(tmp_path))
+
+    paths = r.write(
+        run_id="run-low-conf",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=[case],
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "## Low-confidence Cases" in md
+    assert "std=?" in md
+
+
+def test_reporter_sanitizes_claim_diagnostics_inline_text(tmp_path: Path):
+    case = make_case_result("q001", {"claim_support_rate": 0.0})
+    case.artifact = EvalArtifact(
+        claims=[
+            AtomicClaim(
+                id="c1",
+                text="Unsupported\nclaim with `tick`.",
+                section_id="s1",
+                importance="high",
+            ),
+        ],
+        verdicts=[
+            ClaimVerdict(
+                claim_id="c1",
+                supported=False,
+                reason="Line one\r\nLine two with `tick`.",
+            ),
+        ],
+    )
+    r = Reporter(out_dir=str(tmp_path))
+
+    paths = r.write(
+        run_id="run-claim-inline",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=[case],
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    diagnostics = md.split("## Claim Diagnostics", 1)[1]
+    assert "Unsupported claim with \\`tick\\`." in diagnostics
+    assert "Line one Line two with \\`tick\\`." in diagnostics
