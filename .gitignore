@@ -211,3 +211,4 @@ backend/app/eval/.eval.db-*
 
 # Intent eval results (local-only)
 backend/intent_eval_results/
+.codex

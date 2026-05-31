@@ -7,7 +7,8 @@ DeepResearch V2.0 - 状态管理模块
 使用 TypedDict 确保类型安全，与 LangGraph 完美兼容。
 """
 
-from typing import TypedDict, List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal
+from typing_extensions import TypedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
