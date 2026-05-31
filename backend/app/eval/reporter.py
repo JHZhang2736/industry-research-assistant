@@ -8,6 +8,27 @@ from pathlib import Path
 
 from app.eval.types import CaseResult
 
+_SCORE_GROUPS = {
+    "Information Fidelity": [
+        "claim_support_rate",
+        "citation_verifiability",
+        "relevance_coverage",
+        "completeness",
+    ],
+    "Report Quality": [
+        "coherence",
+        "cohesion_structure",
+        "analytical_depth",
+        "professionalism_readability",
+        "decision_usefulness",
+    ],
+    "Agentic / Operational": [
+        "critic_loop_effectiveness",
+        "cost",
+        "latency",
+    ],
+}
+
 
 class Reporter:
     def __init__(self, out_dir: str):
@@ -83,6 +104,20 @@ class Reporter:
             md.append(f"| {r['name']} | {r['mean']} | {r['median']} | {r['std']} | {r['low_conf']}/{r['n']} | {r['n']} |")
         md.append("")
 
+        md.append("## Score Groups")
+        md.append("")
+        rows_by_name = {row["name"]: row for row in rows}
+        for group, names in _SCORE_GROUPS.items():
+            md.append(f"### {group}")
+            md.append("")
+            md.append("| Metric | Mean | Median | Std | N |")
+            md.append("|---|---|---|---|---|")
+            for name in names:
+                row = rows_by_name.get(name)
+                if row is not None:
+                    md.append(f"| {name} | {row['mean']} | {row['median']} | {row['std']} | {row['n']} |")
+            md.append("")
+
         # Per-case breakdown
         md.append("## Per-case Breakdown")
         md.append("")
@@ -112,6 +147,32 @@ class Reporter:
             md.append("## Low-confidence Cases (judge variance high — manual review recommended)")
             md.append("")
             md.extend(low_conf_rows)
+            md.append("")
+
+        claim_lines = []
+        for c in ok_cases:
+            artifact = c.artifact
+            if artifact is None:
+                continue
+
+            verdict_by_claim = {
+                getattr(verdict, "claim_id", None): verdict
+                for verdict in (getattr(artifact, "verdicts", None) or [])
+            }
+            for claim in (getattr(artifact, "claims", None) or []):
+                verdict = verdict_by_claim.get(getattr(claim, "id", None))
+                if verdict is None or getattr(verdict, "supported", None) is not False:
+                    continue
+                claim_lines.append(
+                    f"- `{c.case.id}` / `{getattr(claim, 'id', '?')}` "
+                    f"({getattr(claim, 'importance', 'unknown')}): "
+                    f"{getattr(claim, 'text', '')} "
+                    f"Reason: {getattr(verdict, 'reason', '')}"
+                )
+        if claim_lines:
+            md.append("## Claim Diagnostics")
+            md.append("")
+            md.extend(claim_lines[:20])
             md.append("")
 
         # Failed cases
