@@ -29,6 +29,15 @@ class JudgeScore:
 
 
 @dataclass
+class StructuredJudgeResult:
+    """One judge's raw structured-output response."""
+    judge_name: str
+    content: str
+    failed: bool = False
+    error: str | None = None
+
+
+@dataclass
 class EnsembleResult:
     """Aggregated score from multiple judges."""
     mean_score: float | None
@@ -72,5 +81,6 @@ class CaseResult:
     ok: bool = True
     error: str | None = None
     state: dict | None = None            # final state snapshot
+    artifact: Any | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
