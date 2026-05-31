@@ -99,7 +99,7 @@ services:
       - industry-network
 
   backend:
-    image: jhzhang2736/industry-research-assistant-backend:latest
+    image: ccr.ccs.tencentyun.com/deepresearch/deepresearch-backend:${BACKEND_TAG:-latest}
     build:
       context: ./backend
     container_name: industry-backend
@@ -112,7 +112,7 @@ services:
       REDIS_HOST: redis
       MILVUS_HOST: milvus-standalone
       SANDBOX_MODE: ${SANDBOX_MODE:-docker}
-      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-jhzhang2736/industry-research-assistant-sandbox:latest}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-ccr.ccs.tencentyun.com/deepresearch/deepresearch-sandbox:latest}
       SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-30}
     volumes:
       # DooD：挂载宿主 docker.sock，backend 运行时为代码沙箱起一次性容器
@@ -131,7 +131,7 @@ services:
       - industry-network
 
   frontend:
-    image: jhzhang2736/industry-research-assistant-frontend:latest
+    image: ccr.ccs.tencentyun.com/deepresearch/deepresearch-frontend:${FRONTEND_TAG:-latest}
     build:
       context: ./frontend
     container_name: industry-frontend
