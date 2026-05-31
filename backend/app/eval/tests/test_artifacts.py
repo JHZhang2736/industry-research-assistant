@@ -86,6 +86,17 @@ def test_artifact_defaults_are_empty_lists():
     assert artifact.quality.coherence is None
 
 
+def test_artifact_round_trip_preserves_quality_error():
+    artifact = EvalArtifact(
+        quality=ReportQualityScores(error="quality boom", partial=True)
+    )
+
+    restored = artifact_from_dict(artifact_to_dict(artifact))
+
+    assert restored.quality.error == "quality boom"
+    assert restored.quality.partial is True
+
+
 def test_artifact_from_none_returns_empty_artifact():
     artifact = artifact_from_dict(None)
 

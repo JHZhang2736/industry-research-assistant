@@ -60,6 +60,7 @@ class ReportQualityScores:
     std_by_dimension: dict[str, float] = field(default_factory=dict)
     low_confidence_dimensions: list[str] = field(default_factory=list)
     partial: bool = False
+    error: str | None = None
 
 
 @dataclass
