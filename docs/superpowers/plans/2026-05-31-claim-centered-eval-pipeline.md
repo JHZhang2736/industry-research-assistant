@@ -2445,7 +2445,7 @@ Add a short implementation note after the status block:
 Run:
 
 ```powershell
-rg -n "8th-evaluator|faithfulness-evaluator|separate-faithfulness-score" docs backend/app/eval
+rg -n --glob '!docs/superpowers/plans/2026-05-31-claim-centered-eval-pipeline.md' "8th evaluator|faithfulness evaluator|bolt-on|standalone faithfulness" docs backend/app/eval
 ```
 
 Expected: no matches.

@@ -11,7 +11,7 @@ The implementation should make this resume point truthful:
 
 > Built a claim-centered LLM-as-a-Judge evaluation framework for industry research reports. The pipeline decomposes reports into atomic claims, verifies each claim with binary evidence-grounded verdicts, and uses weighted multi-judge rubrics to quantify information fidelity and report quality, including relevance, coherence, structural cohesion, completeness, analytical depth, professional readability, and decision usefulness.
 
-This means claim decomposition is not a standalone `faithfulness` add-on. It is the shared intermediate layer that powers the whole report evaluation chain.
+This means claim decomposition is the shared intermediate layer that powers the whole report evaluation chain.
 
 ## 2. Current Problem
 
