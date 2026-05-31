@@ -1,7 +1,7 @@
 """Claim-centered eval artifact dataclasses."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
 
@@ -77,15 +77,35 @@ def artifact_to_dict(artifact: EvalArtifact) -> dict[str, Any]:
     return asdict(artifact)
 
 
-def artifact_from_dict(payload: dict[str, Any]) -> EvalArtifact:
+def _coerce_dataclass(cls: type, value: Any) -> Any:
+    if isinstance(value, cls):
+        return value
+    if value is None:
+        return cls()
+    field_names = {item.name for item in fields(cls)}
+    return cls(**{key: value for key, value in value.items() if key in field_names})
+
+
+def _coerce_dataclass_list(cls: type, values: Any) -> list[Any]:
+    if values is None:
+        return []
+    return [_coerce_dataclass(cls, item) for item in values]
+
+
+def artifact_from_dict(payload: dict[str, Any] | EvalArtifact | None) -> EvalArtifact:
+    if isinstance(payload, EvalArtifact):
+        return payload
+    if payload is None:
+        payload = {}
+
     return EvalArtifact(
-        evidence=[EvidenceItem(**item) for item in payload.get("evidence", [])],
-        sections=[ReportSection(**item) for item in payload.get("sections", [])],
-        requirements=[
-            QueryRequirement(**item) for item in payload.get("requirements", [])
-        ],
-        claims=[AtomicClaim(**item) for item in payload.get("claims", [])],
-        verdicts=[ClaimVerdict(**item) for item in payload.get("verdicts", [])],
-        quality=ReportQualityScores(**payload.get("quality", {})),
-        errors=list(payload.get("errors", [])),
+        evidence=_coerce_dataclass_list(EvidenceItem, payload.get("evidence")),
+        sections=_coerce_dataclass_list(ReportSection, payload.get("sections")),
+        requirements=_coerce_dataclass_list(
+            QueryRequirement, payload.get("requirements")
+        ),
+        claims=_coerce_dataclass_list(AtomicClaim, payload.get("claims")),
+        verdicts=_coerce_dataclass_list(ClaimVerdict, payload.get("verdicts")),
+        quality=_coerce_dataclass(ReportQualityScores, payload.get("quality")),
+        errors=list(payload.get("errors") or []),
     )

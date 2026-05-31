@@ -84,3 +84,59 @@ def test_artifact_defaults_are_empty_lists():
     assert artifact.verdicts == []
     assert artifact.errors == []
     assert artifact.quality.coherence is None
+
+
+def test_artifact_from_none_returns_empty_artifact():
+    artifact = artifact_from_dict(None)
+
+    assert artifact == EvalArtifact()
+
+
+def test_artifact_from_dict_ignores_unknown_additive_keys():
+    artifact = artifact_from_dict(
+        {
+            "evidence": [
+                {
+                    "id": "f1",
+                    "text": "Sales reached 9.5 million vehicles.",
+                    "source_name": "CAAM",
+                    "source_url": "https://example.com/a",
+                    "source_type": "official",
+                    "future_field": "ignored",
+                }
+            ],
+            "quality": {"coherence": 8.0, "future_dimension": 9.0},
+            "future_top_level": "ignored",
+        }
+    )
+
+    assert artifact.evidence[0].id == "f1"
+    assert artifact.quality.coherence == 8.0
+
+
+def test_artifact_from_dict_treats_none_quality_as_default_scores():
+    artifact = artifact_from_dict({"quality": None})
+
+    assert artifact.quality == ReportQualityScores()
+
+
+def test_artifact_from_dict_accepts_existing_nested_dataclasses():
+    evidence = EvidenceItem(
+        id="f1",
+        text="Sales reached 9.5 million vehicles.",
+        source_name="CAAM",
+        source_url="https://example.com/a",
+        source_type="official",
+    )
+    quality = ReportQualityScores(coherence=8.0)
+
+    artifact = artifact_from_dict({"evidence": [evidence], "quality": quality})
+
+    assert artifact.evidence == [evidence]
+    assert artifact.quality == quality
+
+
+def test_artifact_from_dict_returns_existing_artifact_unchanged():
+    artifact = EvalArtifact(errors=["already built"])
+
+    assert artifact_from_dict(artifact) is artifact
