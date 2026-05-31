@@ -111,6 +111,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-industry_assistant}
       REDIS_HOST: redis
       MILVUS_HOST: milvus-standalone
+      SANDBOX_MODE: ${SANDBOX_MODE:-docker}
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-jhzhang2736/industry-research-assistant-sandbox:latest}
+      SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-30}
+    volumes:
+      # DooD：挂载宿主 docker.sock，backend 运行时为代码沙箱起一次性容器
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
