@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from typing import Callable
 
 from app.eval.artifacts import AtomicClaim, EvalArtifact
 from app.eval.settings import PRICING_RMB_PER_M_TOKENS, REPORT_QUALITY_DIMENSIONS
@@ -33,22 +34,57 @@ class MetricCalculator:
         else:
             results.extend(
                 [
-                    self._claim_support_rate(artifact),
-                    self._citation_verifiability(artifact),
-                    self._relevance_coverage(artifact),
-                    self._completeness(artifact),
+                    self._safe_result(
+                        "claim_support_rate",
+                        lambda: self._claim_support_rate(artifact),
+                    ),
+                    self._safe_result(
+                        "citation_verifiability",
+                        lambda: self._citation_verifiability(artifact),
+                    ),
+                    self._safe_result(
+                        "relevance_coverage",
+                        lambda: self._relevance_coverage(artifact),
+                    ),
+                    self._safe_result(
+                        "completeness",
+                        lambda: self._completeness(artifact),
+                    ),
                 ]
             )
 
         results.extend(self._quality_metrics(artifact))
+        critic_loop = self._safe_result("critic_loop", lambda: self._critic_loop(ctx))
         results.extend(
             [
-                self._critic_loop_effectiveness(ctx),
-                self._cost(ctx),
-                self._latency(ctx),
+                critic_loop,
+                EvalResult(
+                    evaluator_name="critic_loop_effectiveness",
+                    score=critic_loop.score,
+                    raw_judge_outputs=critic_loop.raw_judge_outputs,
+                    metadata=critic_loop.metadata,
+                    error=critic_loop.error,
+                    low_confidence=critic_loop.low_confidence,
+                ),
+                self._safe_result("cost", lambda: self._cost(ctx)),
+                self._safe_result("latency", lambda: self._latency(ctx)),
             ]
         )
         return results
+
+    def _safe_result(
+        self,
+        evaluator_name: str,
+        calculate: Callable[[], EvalResult],
+    ) -> EvalResult:
+        try:
+            return calculate()
+        except Exception as exc:  # noqa: BLE001 - eval metrics must fail softly.
+            return EvalResult(
+                evaluator_name=evaluator_name,
+                score=None,
+                error=f"{evaluator_name} failed: {exc}",
+            )
 
     def _claim_support_rate(self, artifact: EvalArtifact) -> EvalResult:
         verdicts = {verdict.claim_id: verdict for verdict in artifact.verdicts}
@@ -83,7 +119,9 @@ class MetricCalculator:
         )
 
     def _citation_verifiability(self, artifact: EvalArtifact) -> EvalResult:
-        cited_claims = [claim for claim in artifact.claims if claim.citation_ids]
+        cited_claims = [
+            claim for claim in artifact.claims if _as_list(claim.citation_ids)
+        ]
         if not cited_claims:
             return EvalResult(
                 evaluator_name="citation_verifiability",
@@ -96,7 +134,7 @@ class MetricCalculator:
         normalized_citations = [
             _normalize_id(citation_id)
             for claim in cited_claims
-            for citation_id in claim.citation_ids
+            for citation_id in _as_list(claim.citation_ids)
         ]
 
         known_citations = [
@@ -115,7 +153,7 @@ class MetricCalculator:
         for claim in cited_claims:
             claim_citations = {
                 _normalize_id(citation_id)
-                for citation_id in claim.citation_ids
+                for citation_id in _as_list(claim.citation_ids)
                 if _normalize_id(citation_id) in evidence_ids
             }
             if not claim_citations:
@@ -123,7 +161,7 @@ class MetricCalculator:
             verdict_evidence = {
                 _normalize_id(evidence_id)
                 for evidence_id in (
-                    verdicts.get(claim.id).evidence_ids
+                    _as_list(verdicts.get(claim.id).evidence_ids)
                     if verdicts.get(claim.id)
                     else []
                 )
@@ -173,7 +211,7 @@ class MetricCalculator:
         high_importance = [
             requirement
             for requirement in artifact.requirements
-            if requirement.importance.lower() == "high"
+            if str(requirement.importance or "").lower() == "high"
         ]
         requirements = high_importance or artifact.requirements
         if not requirements:
@@ -203,17 +241,38 @@ class MetricCalculator:
     def _quality_metrics(self, artifact: EvalArtifact) -> list[EvalResult]:
         results: list[EvalResult] = []
         quality = artifact.quality
+        raw_judge_outputs = (
+            quality.raw_judge_outputs
+            if isinstance(getattr(quality, "raw_judge_outputs", None), list)
+            else []
+        )
+        std_by_dimension = (
+            quality.std_by_dimension
+            if isinstance(getattr(quality, "std_by_dimension", None), dict)
+            else {}
+        )
+        low_confidence_dimensions = (
+            quality.low_confidence_dimensions
+            if isinstance(
+                getattr(quality, "low_confidence_dimensions", None),
+                (list, tuple, set),
+            )
+            else set()
+        )
+        partial = bool(getattr(quality, "partial", False))
+        quality_error = getattr(quality, "error", None)
+
         for dimension in REPORT_QUALITY_DIMENSIONS:
-            score = getattr(quality, dimension)
+            score = getattr(quality, dimension, None)
             if score is None:
                 results.append(
                     EvalResult(
                         evaluator_name=dimension,
                         score=None,
-                        raw_judge_outputs=quality.raw_judge_outputs,
-                        metadata={"partial": quality.partial},
+                        raw_judge_outputs=raw_judge_outputs,
+                        metadata={"partial": partial},
                         error=f"missing quality score for {dimension}",
-                        low_confidence=dimension in quality.low_confidence_dimensions,
+                        low_confidence=dimension in low_confidence_dimensions,
                     )
                 )
                 continue
@@ -222,25 +281,25 @@ class MetricCalculator:
                 EvalResult(
                     evaluator_name=dimension,
                     score=score,
-                    raw_judge_outputs=quality.raw_judge_outputs,
+                    raw_judge_outputs=raw_judge_outputs,
                     metadata={
-                        "std": quality.std_by_dimension.get(dimension),
-                        "partial": quality.partial,
+                        "std": std_by_dimension.get(dimension),
+                        "partial": partial,
                     },
-                    error=quality.error,
-                    low_confidence=dimension in quality.low_confidence_dimensions,
+                    error=quality_error,
+                    low_confidence=dimension in low_confidence_dimensions,
                 )
             )
         return results
 
-    def _critic_loop_effectiveness(self, ctx: EvalContext) -> EvalResult:
+    def _critic_loop(self, ctx: EvalContext) -> EvalResult:
         feedback = ctx.state.get("critic_feedback") or []
         total = len(feedback)
         iterations = int(ctx.state.get("iteration") or 0)
         quality = float(ctx.state.get("quality_score") or 0.0)
         if total == 0:
             return EvalResult(
-                evaluator_name="critic_loop_effectiveness",
+                evaluator_name="critic_loop",
                 score=None,
                 metadata={
                     "total_feedback": 0,
@@ -254,7 +313,7 @@ class MetricCalculator:
         resolved = sum(1 for item in feedback if item.get("resolved") is True)
         rate = resolved / total
         return EvalResult(
-            evaluator_name="critic_loop_effectiveness",
+            evaluator_name="critic_loop",
             score=round(rate * 10, 2),
             metadata={
                 "total_feedback": total,
@@ -325,7 +384,23 @@ class MetricCalculator:
 
 
 def _covered_requirement_ids(claims: list[AtomicClaim]) -> set[str]:
-    return {requirement_id for claim in claims for requirement_id in claim.requirement_ids}
+    return {
+        requirement_id
+        for claim in claims
+        for requirement_id in _as_list(claim.requirement_ids)
+    }
+
+
+def _as_list(value: object) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple | set):
+        return list(value)
+    if isinstance(value, str):
+        return [value]
+    raise TypeError(f"expected list-like value, got {type(value).__name__}")
 
 
 def _normalize_id(value: str) -> str:

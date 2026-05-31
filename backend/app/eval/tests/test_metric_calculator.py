@@ -79,9 +79,14 @@ def test_metric_calculator_computes_claim_metrics():
     assert scores["analytical_depth"] is None
     assert scores["professionalism_readability"] is None
     assert scores["decision_usefulness"] is None
+    assert scores["critic_loop"] == 10.0
     assert scores["critic_loop_effectiveness"] == 10.0
     assert scores["cost"] is not None
     assert scores["latency"] == 300.0
+
+    by_name = {r.evaluator_name: r for r in results}
+    assert by_name["critic_loop"].metadata == by_name["critic_loop_effectiveness"].metadata
+    assert by_name["critic_loop"].error == by_name["critic_loop_effectiveness"].error
 
 
 def test_metric_calculator_records_artifact_errors():
@@ -101,6 +106,53 @@ def test_missing_quality_dimensions_return_errors():
     assert by_name["coherence"].score == 8.0
     assert by_name["analytical_depth"].score is None
     assert "missing quality score" in by_name["analytical_depth"].error
+
+
+def test_malformed_none_artifact_fields_do_not_abort_metrics():
+    artifact = EvalArtifact(
+        evidence=[make_evidence("ref_1")],
+        requirements=[QueryRequirement("r1", "market size", None)],
+        claims=[AtomicClaim("c1", "Market size grew.", "s1", "high", None, None)],
+        verdicts=[ClaimVerdict("c1", True, reason="supported", evidence_ids=None)],
+        quality=ReportQualityScores(
+            coherence=8.0,
+            raw_judge_outputs=None,
+            std_by_dimension=None,
+            low_confidence_dimensions=None,
+        ),
+    )
+
+    results = MetricCalculator().calculate(make_ctx(), artifact)
+    by_name = {r.evaluator_name: r for r in results}
+
+    assert by_name["claim_support_rate"].score == 10.0
+    assert by_name["citation_verifiability"].score is None
+    assert "no cited claims" in by_name["citation_verifiability"].error
+    assert by_name["relevance_coverage"].score == 0.0
+    assert by_name["completeness"].score == 0.0
+    assert by_name["coherence"].score == 8.0
+    assert by_name["coherence"].raw_judge_outputs == []
+    assert by_name["coherence"].metadata["std"] is None
+
+
+def test_malformed_metric_failure_does_not_abort_other_metrics():
+    artifact = EvalArtifact(
+        evidence=[make_evidence("ref_1")],
+        requirements=[QueryRequirement("r1", "market size", "high")],
+        claims=[AtomicClaim("c1", "Market size grew.", "s1", "high", 5, ["r1"])],
+        verdicts=[ClaimVerdict("c1", True, reason="supported", evidence_ids=["ref_1"])],
+        quality=ReportQualityScores(coherence=8.0),
+    )
+
+    results = MetricCalculator().calculate(make_ctx(), artifact)
+    by_name = {r.evaluator_name: r for r in results}
+
+    assert by_name["claim_support_rate"].score == 10.0
+    assert by_name["citation_verifiability"].score is None
+    assert "citation_verifiability" in by_name["citation_verifiability"].error
+    assert by_name["relevance_coverage"].score == 10.0
+    assert by_name["completeness"].score == 10.0
+    assert by_name["coherence"].score == 8.0
 
 
 def test_citation_verifiability_normalizes_ids_and_uses_overlap():
