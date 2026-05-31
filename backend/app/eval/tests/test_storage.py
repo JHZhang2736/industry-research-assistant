@@ -146,3 +146,42 @@ def test_storage_save_idempotent(db_path: str):
     claim_n = conn.execute("SELECT COUNT(*) FROM claim_verdicts WHERE run_id='run-2'").fetchone()[0]
     assert claim_n == 1
     conn.close()
+
+
+def test_storage_clears_claim_verdicts_when_artifact_removed(db_path: str):
+    s = EvalStorage(db_path)
+    s.init_schema()
+    s.save_run_start("run-3", "full", datetime(2026, 5, 26), "abc", {})
+    with_artifact = CaseResult(
+        case=EvalCase(id="q003", query="x", category="c", difficulty="easy"),
+        results=[EvalResult(evaluator_name="cost", score=1.0)],
+        artifact=EvalArtifact(
+            claims=[
+                AtomicClaim(
+                    id="c1",
+                    text="A claim.",
+                    section_id="s1",
+                    importance="medium",
+                )
+            ],
+        ),
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+    )
+    without_artifact = CaseResult(
+        case=EvalCase(id="q003", query="x", category="c", difficulty="easy"),
+        results=[EvalResult(evaluator_name="cost", score=1.0)],
+        artifact=None,
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+    )
+
+    s.save_case("run-3", with_artifact)
+    s.save_case("run-3", without_artifact)
+
+    conn = sqlite3.connect(db_path)
+    claim_n = conn.execute(
+        "SELECT COUNT(*) FROM claim_verdicts WHERE run_id='run-3' AND case_id='q003'"
+    ).fetchone()[0]
+    assert claim_n == 0
+    conn.close()

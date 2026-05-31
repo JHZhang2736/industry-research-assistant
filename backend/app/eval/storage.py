@@ -161,6 +161,10 @@ class EvalStorage:
                 )
 
             artifact = case_result.artifact
+            c.execute(
+                "DELETE FROM claim_verdicts WHERE run_id=? AND case_id=?",
+                (run_id, c_id),
+            )
             if artifact is not None:
                 c.execute(
                     "INSERT OR REPLACE INTO eval_artifacts "
@@ -170,10 +174,6 @@ class EvalStorage:
                         c_id,
                         json.dumps(artifact_to_dict(artifact), ensure_ascii=False),
                     ),
-                )
-                c.execute(
-                    "DELETE FROM claim_verdicts WHERE run_id=? AND case_id=?",
-                    (run_id, c_id),
                 )
                 verdict_by_claim = {v.claim_id: v for v in artifact.verdicts}
                 for claim in artifact.claims:
