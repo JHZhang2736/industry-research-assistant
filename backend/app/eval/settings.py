@@ -84,6 +84,19 @@ MAX_EVIDENCE_ITEMS = int(os.getenv("EVAL_MAX_EVIDENCE_ITEMS", "60"))
 EVIDENCE_ITEM_CHARS = int(os.getenv("EVAL_EVIDENCE_ITEM_CHARS", "300"))
 MAX_CLAIMS = int(os.getenv("EVAL_MAX_CLAIMS", "40"))
 REPORT_CHARS = int(os.getenv("EVAL_REPORT_CHARS", "8000"))
+JUDGE_WEIGHTS: dict[str, float] = {
+    "deepseek": float(os.getenv("EVAL_JUDGE_WEIGHT_DEEPSEEK", "0.4")),
+    "qwen": float(os.getenv("EVAL_JUDGE_WEIGHT_QWEN", "0.4")),
+    "mimo": float(os.getenv("EVAL_JUDGE_WEIGHT_MIMO", "0.2")),
+}
+
+REPORT_QUALITY_DIMENSIONS = (
+    "coherence",
+    "cohesion_structure",
+    "analytical_depth",
+    "professionalism_readability",
+    "decision_usefulness",
+)
 
 # SQLite storage path
 SQLITE_PATH = os.getenv(
