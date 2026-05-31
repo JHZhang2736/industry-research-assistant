@@ -2440,12 +2440,12 @@ Add a short implementation note after the status block:
 > Implementation note: The shipped pipeline preserves the existing SQLite score tables and adds artifact/claim-verdict persistence for auditability.
 ```
 
-- [ ] **Step 3: Verify docs no longer describe faithfulness as a bolt-on metric**
+- [ ] **Step 3: Verify docs no longer describe claim verification as a separate faithfulness score**
 
 Run:
 
 ```powershell
-rg -n "8th evaluator|faithfulness evaluator|bolt-on|standalone faithfulness" docs backend/app/eval
+rg -n "8th-evaluator|faithfulness-evaluator|separate-faithfulness-score" docs backend/app/eval
 ```
 
 Expected: no matches.

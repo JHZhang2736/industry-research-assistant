@@ -9,7 +9,7 @@
 
 ## TL;DR（30 秒电梯版）
 
-我为自己的 deep research multi-agent 系统造了一套自动化 eval 框架。**7 维 evaluator**（Relevance / Coherence / Citation / Completeness / CriticLoopEffectiveness / Cost / Latency）覆盖产出质量 + agentic 能力 + 操作型指标。**3 家族 ensemble judge**（DeepSeek / Xiaomi MiMo / Qwen）跨家族投票缓解 self-preference bias。本地 SQLite 落库 + LangSmith trace 上报，5 并发跑 30 个 query 约 30 分钟，CI 通过 GitHub Actions workflow_dispatch 手动触发。第一次真跑就暴露了 service 层 3 个独立 bug（Writer 不打引用、`max_iterations` 默认太小、`state["logs"]` 持久化丢失），证明 eval 框架本身的价值。
+I redesigned the eval framework for the deep-research multi-agent system around a claim-centered artifact. Each generated report is decomposed into atomic claims, claims are verified against the collected evidence index with binary supported/unsupported verdicts, and the same claim layer powers information fidelity, citation verifiability, relevance coverage, and completeness. Subjective report quality is scored with a weighted multi-judge rubric across coherence, structural cohesion, analytical depth, professional readability, and decision usefulness. The framework stores claim verdicts for auditability and marks high-variance judge dimensions as low confidence.
 
 ---
 

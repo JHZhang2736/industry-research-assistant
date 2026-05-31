@@ -2,7 +2,8 @@
 
 > Date: 2026-05-31
 > Scope: Redesign `backend/app/eval/` into a claim-centered evaluation pipeline for industry research reports.
-> Status: Design approved for implementation planning.
+> Status: Implemented.
+> Implementation note: The shipped pipeline preserves the existing SQLite score tables and adds artifact/claim-verdict persistence for auditability.
 
 ## 1. Resume Target
 
@@ -402,7 +403,7 @@ Agentic / Operational
   - latency
 ```
 
-This satisfies "information fidelity and report quality" without making faithfulness a bolt-on metric.
+This satisfies "information fidelity and report quality" by making claim verification a shared evaluation layer.
 
 ## 12. Runner Changes
 
