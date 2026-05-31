@@ -20,6 +20,7 @@ from datetime import datetime
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
 from ..concurrency import BOCHA_SEM
+from ..security import guard_results, wrap_untrusted, INJECTION_DEFENSE_PREAMBLE
 
 # 网页文本提取库（可选依赖）
 try:
@@ -1192,9 +1193,20 @@ URL: {url}
         if not results:
             return None
 
-        # 格式化搜索结果
+        # 注入防护：丢弃可疑结果
+        guarded = guard_results(
+            results[:15],
+            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] 丢弃疑似注入来源 {dropped.get('url', '')}: "
+                f"{verdict.matched_patterns}"
+            )
+
+        # 格式化保留的搜索结果
         formatted_results = []
-        for i, r in enumerate(results[:15]):  # 最多分析15条
+        for i, r in enumerate(guarded.kept):
             formatted_results.append(f"""
 [{i+1}] {r.get('title', 'N/A')}
 URL: {r.get('url', '')}
@@ -1217,11 +1229,12 @@ URL: {r.get('url', '')}
             section_title=section.get("title", ""),
             section_description=section.get("description", ""),
             hypotheses=hypotheses_text,
-            search_results="\n".join(formatted_results)
+            search_results=wrap_untrusted("\n".join(formatted_results), source_id="web_search"),
         )
 
         response = await self.call_llm(
-            system_prompt="你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
+            system_prompt=INJECTION_DEFENSE_PREAMBLE
+            + "你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
