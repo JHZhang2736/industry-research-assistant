@@ -20,6 +20,7 @@ from datetime import datetime
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
 from ..concurrency import BOCHA_SEM
+from ..security import detect_injection, guard_results, wrap_untrusted, INJECTION_DEFENSE_PREAMBLE
 
 # 网页文本提取库（可选依赖）
 try:
@@ -488,8 +489,16 @@ URL: {url}
         state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """分析补充搜索结果"""
+        guarded = guard_results(
+            results[:8],
+            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] 补充搜索丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
+            )
         results_text = []
-        for r in results[:8]:
+        for r in guarded.kept:
             results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
 
         prompt = f"""你是一位专业的研究分析师，正在补充搜索以解决审核发现的信息缺失问题。
@@ -501,7 +510,7 @@ URL: {url}
 {search_query}
 
 ## 搜索结果
-{chr(10).join(results_text)}
+{wrap_untrusted(chr(10).join(results_text), source_id="supplementary_search")}
 
 ## 任务
 从搜索结果中提取与"{search_query}"直接相关的关键事实和数据。
@@ -526,7 +535,8 @@ URL: {url}
 ```"""
 
         response = await self.call_llm(
-            system_prompt="你是专业的信息提取专家，擅长从搜索结果中提取结构化信息。",
+            system_prompt=INJECTION_DEFENSE_PREAMBLE
+            + "你是专业的信息提取专家，擅长从搜索结果中提取结构化信息。",
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
@@ -994,8 +1004,16 @@ URL: {url}
         state: Optional[ResearchState] = None,
     ) -> Optional[Dict]:
         """分析深度搜索结果"""
+        guarded = guard_results(
+            results[:6],
+            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] deep_search 丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
+            )
         results_text = []
-        for r in results[:6]:
+        for r in guarded.kept:
             results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
 
         hypotheses_text = ""
@@ -1017,7 +1035,7 @@ URL: {url}
 {hypotheses_text}
 
 ## 搜索结果
-{chr(10).join(results_text)}
+{wrap_untrusted(chr(10).join(results_text), source_id="deep_search")}
 
 ## 任务
 1. 从搜索结果中提取关键事实和数据（特别关注官方来源和权威数据）
@@ -1046,7 +1064,8 @@ URL: {url}
 ```"""
 
         response = await self.call_llm(
-            system_prompt="你是专业的信息验证专家，擅长从搜索结果中提取权威信息并追溯原始来源。",
+            system_prompt=INJECTION_DEFENSE_PREAMBLE
+            + "你是专业的信息验证专家，擅长从搜索结果中提取权威信息并追溯原始来源。",
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
@@ -1192,9 +1211,20 @@ URL: {url}
         if not results:
             return None
 
-        # 格式化搜索结果
+        # 注入防护：丢弃可疑结果
+        guarded = guard_results(
+            results[:15],
+            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] 丢弃疑似注入来源 {dropped.get('url', '')}: "
+                f"{verdict.matched_patterns}"
+            )
+
+        # 格式化保留的搜索结果
         formatted_results = []
-        for i, r in enumerate(results[:15]):  # 最多分析15条
+        for i, r in enumerate(guarded.kept):
             formatted_results.append(f"""
 [{i+1}] {r.get('title', 'N/A')}
 URL: {r.get('url', '')}
@@ -1217,11 +1247,12 @@ URL: {r.get('url', '')}
             section_title=section.get("title", ""),
             section_description=section.get("description", ""),
             hypotheses=hypotheses_text,
-            search_results="\n".join(formatted_results)
+            search_results=wrap_untrusted("\n".join(formatted_results), source_id="web_search"),
         )
 
         response = await self.call_llm(
-            system_prompt="你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
+            system_prompt=INJECTION_DEFENSE_PREAMBLE
+            + "你是专业的研究分析师，擅长从搜索结果中提取结构化信息、验证假设并评估来源质量。",
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
@@ -1256,15 +1287,23 @@ URL: {r.get('url', '')}
                 self.logger.warning(f"Extracted content too short for {url}")
                 return None
 
+            # 注入防护：整页命中即跳过
+            verdict = detect_injection(content)
+            if verdict.flagged:
+                self.logger.warning(
+                    f"[InjectionGuard] deep_read 跳过疑似注入页面 {url}: {verdict.matched_patterns}"
+                )
+                return None
+
             prompt = self.DEEP_READ_PROMPT.format(
                 query=query,
                 url=url,
                 title=title,
-                content=content
+                content=wrap_untrusted(content, source_id=url),
             )
 
             llm_response = await self.call_llm(
-                system_prompt="你是专业的文档分析师。",
+                system_prompt=INJECTION_DEFENSE_PREAMBLE + "你是专业的文档分析师。",
                 user_prompt=prompt,
                 json_mode=True,
                 state=state,

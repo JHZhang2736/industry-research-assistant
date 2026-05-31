@@ -103,6 +103,18 @@ class ResearchConfig:
 
 
 @dataclass
+class SandboxConfig:
+    """代码执行沙箱配置（默认 inprocess，服务器经环境变量切到 docker）"""
+    mode: str = field(default_factory=lambda: os.getenv("SANDBOX_MODE", "inprocess"))
+    image: str = field(default_factory=lambda: os.getenv(
+        "SANDBOX_IMAGE", "industry-research-sandbox:latest"))
+    mem_limit: str = field(default_factory=lambda: os.getenv("SANDBOX_MEM", "512m"))
+    cpus: float = field(default_factory=lambda: float(os.getenv("SANDBOX_CPUS", "1.0")))
+    pids_limit: int = field(default_factory=lambda: int(os.getenv("SANDBOX_PIDS", "64")))
+    timeout: int = field(default_factory=lambda: int(os.getenv("SANDBOX_TIMEOUT", "30")))
+
+
+@dataclass
 class LLMConfig:
     """
     LLM 配置主类
@@ -130,6 +142,9 @@ class LLMConfig:
 
     # 研究流程配置
     research: ResearchConfig = field(default_factory=ResearchConfig)
+
+    # 代码沙箱配置
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
     def get_agent_config(self, agent_name: str) -> AgentModelConfig:
         """获取指定 Agent 的配置"""

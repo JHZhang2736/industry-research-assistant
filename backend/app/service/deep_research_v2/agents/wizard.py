@@ -23,6 +23,11 @@ from contextlib import redirect_stdout, redirect_stderr
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
 
+try:
+    from config.llm_config import get_config
+except ImportError:
+    from app.config.llm_config import get_config
+
 
 class CodeWizard(BaseAgent):
     """
@@ -348,6 +353,7 @@ df = df.dropna()
             llm_base_url=llm_base_url,
             model=model
         )
+        self._docker_executor = None
 
     async def process(self, state: ResearchState) -> ResearchState:
         """处理入口"""
@@ -1069,8 +1075,13 @@ df = df.dropna()
             }
 
         try:
-            # 在线程池中执行代码
-            result = await asyncio.to_thread(self._execute_in_sandbox, code)
+            mode = get_config().sandbox.mode
+            if mode == "docker":
+                self.logger.info("[CodeWizard] 使用 Docker 沙箱执行代码")
+                result = await asyncio.to_thread(self._get_docker_executor().execute, code)
+            else:
+                self.logger.info("[CodeWizard] 使用进程内沙箱执行代码（回退模式）")
+                result = await asyncio.to_thread(self._execute_in_sandbox, code)
             return result
         except Exception as e:
             self.logger.error(f"Code execution error: {e}")
@@ -1091,6 +1102,20 @@ df = df.dropna()
                 return False
 
         return True
+
+    def _get_docker_executor(self):
+        """懒加载 DooD 执行器（按当前配置构造一次）。"""
+        if self._docker_executor is None:
+            cfg = get_config().sandbox
+            from ..security.docker_executor import DockerCodeExecutor
+            self._docker_executor = DockerCodeExecutor(
+                image=cfg.image,
+                mem_limit=cfg.mem_limit,
+                cpus=cfg.cpus,
+                pids_limit=cfg.pids_limit,
+                timeout=cfg.timeout,
+            )
+        return self._docker_executor
 
     def _execute_in_sandbox(self, code: str) -> Dict[str, Any]:
         """
