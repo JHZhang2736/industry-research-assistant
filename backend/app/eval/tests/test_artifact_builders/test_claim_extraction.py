@@ -30,6 +30,30 @@ async def test_claim_extraction_builder_parses_requirements_and_claims():
 
 
 @pytest.mark.asyncio
+async def test_claim_extraction_builder_defaults_sparse_items():
+    judge = AsyncMock()
+    judge.generate_structured = AsyncMock(return_value=StructuredJudgeResult(
+        judge_name="qwen",
+        content='{"requirements":[{"text":" market size "}],"claims":[{"text":" Sales grew. "}]}',
+    ))
+
+    requirements, claims = await ClaimExtractionBuilder(max_claims=10).build(
+        query="Analyze market size",
+        sections=[],
+        judge=judge,
+    )
+
+    assert requirements[0].id == "r1"
+    assert requirements[0].text == "market size"
+    assert requirements[0].importance == "medium"
+    assert claims[0].id == "c1"
+    assert claims[0].text == "Sales grew."
+    assert claims[0].importance == "medium"
+    assert claims[0].citation_ids == []
+    assert claims[0].requirement_ids == []
+
+
+@pytest.mark.asyncio
 async def test_claim_extraction_builder_rejects_bad_json():
     judge = AsyncMock()
     judge.generate_structured = AsyncMock(return_value=StructuredJudgeResult("qwen", "not json"))

@@ -43,13 +43,11 @@ class ClaimVerificationBuilder:
             raise ValueError(f"structured judge failed: {result.error or result.content}")
 
         payload = parse_json_object(result.content)
-        verdicts_by_claim_id = {
-            verdict.claim_id: verdict
-            for verdict in (
-                ClaimVerdict(**_known_fields(ClaimVerdict, item))
-                for item in payload.get("verdicts") or []
-            )
-        }
+        known_claim_ids = {claim.id for claim in claims}
+        verdicts_by_claim_id = _normalize_verdicts(
+            payload.get("verdicts") or [],
+            known_claim_ids,
+        )
 
         return [
             verdicts_by_claim_id.get(
@@ -66,9 +64,39 @@ class ClaimVerificationBuilder:
         ]
 
 
-def _known_fields(cls: type, item: dict[str, Any]) -> dict[str, Any]:
-    field_names = {field.name for field in fields(cls)}
-    return {key: value for key, value in item.items() if key in field_names}
+def _normalize_verdicts(
+    items: list[Any],
+    known_claim_ids: set[str],
+) -> dict[str, ClaimVerdict]:
+    verdicts_by_claim_id: dict[str, ClaimVerdict] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        claim_id = str(item.get("claim_id") or "").strip()
+        if not claim_id or claim_id not in known_claim_ids:
+            continue
+        verdicts_by_claim_id[claim_id] = ClaimVerdict(
+            claim_id=claim_id,
+            supported=_coerce_supported(item.get("supported")),
+            reason=str(item.get("reason") or ""),
+            evidence_ids=_string_list(item.get("evidence_ids")),
+            confidence=str(item.get("confidence") or "low"),
+        )
+    return verdicts_by_claim_id
+
+
+def _coerce_supported(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() == "true"
+    return bool(value)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
 
 
 def _to_jsonable(item: Any) -> dict[str, Any]:

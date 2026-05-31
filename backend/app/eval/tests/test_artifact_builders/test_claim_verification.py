@@ -71,3 +71,28 @@ async def test_claim_verification_builder_marks_missing_verdicts_unsupported():
     assert verdicts[0].claim_id == "c1"
     assert verdicts[0].supported is False
     assert verdicts[0].reason == "judge omitted verdict"
+
+
+@pytest.mark.asyncio
+async def test_claim_verification_builder_skips_malformed_verdicts():
+    judge = AsyncMock()
+    judge.generate_structured = AsyncMock(return_value=StructuredJudgeResult(
+        judge_name="qwen",
+        content='{"verdicts":[{"supported":true,"reason":"missing id"},{"claim_id":"unknown","supported":true,"reason":"unknown claim"},{"claim_id":"c1","supported":"false","reason":"not supported","evidence_ids":["f1"]}]}',
+    ))
+    claims = [
+        AtomicClaim(
+            id="c1",
+            text="Unsupported claim.",
+            section_id=None,
+            importance="medium",
+            citation_ids=[],
+            requirement_ids=[],
+        )
+    ]
+
+    verdicts = await ClaimVerificationBuilder().build(claims, [], judge)
+
+    assert verdicts[0].claim_id == "c1"
+    assert verdicts[0].supported is False
+    assert verdicts[0].reason == "not supported"

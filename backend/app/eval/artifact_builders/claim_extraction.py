@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -51,19 +50,51 @@ class ClaimExtractionBuilder:
             raise ValueError(f"structured judge failed: {result.error or result.content}")
 
         payload = parse_json_object(result.content)
-        requirements = [
-            QueryRequirement(**_known_fields(QueryRequirement, item))
-            for item in payload.get("requirements") or []
-            if str(item.get("text") or "").strip()
-        ]
-        claims = [
-            AtomicClaim(**_known_fields(AtomicClaim, item))
-            for item in payload.get("claims") or []
-            if str(item.get("text") or "").strip()
-        ]
+        requirements = _normalize_requirements(payload.get("requirements") or [])
+        claims = _normalize_claims(payload.get("claims") or [])
         return requirements, claims[: self.max_claims]
 
 
-def _known_fields(cls: type, item: dict[str, Any]) -> dict[str, Any]:
-    field_names = {field.name for field in fields(cls)}
-    return {key: value for key, value in item.items() if key in field_names}
+def _normalize_requirements(items: list[Any]) -> list[QueryRequirement]:
+    requirements: list[QueryRequirement] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        requirements.append(
+            QueryRequirement(
+                id=str(item.get("id") or f"r{index}"),
+                text=text,
+                importance=str(item.get("importance") or "medium"),
+            )
+        )
+    return requirements
+
+
+def _normalize_claims(items: list[Any]) -> list[AtomicClaim]:
+    claims: list[AtomicClaim] = []
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        claims.append(
+            AtomicClaim(
+                id=str(item.get("id") or f"c{index}"),
+                text=text,
+                section_id=str(item.get("section_id") or ""),
+                importance=str(item.get("importance") or "medium"),
+                citation_ids=_string_list(item.get("citation_ids")),
+                requirement_ids=_string_list(item.get("requirement_ids")),
+            )
+        )
+    return claims
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
