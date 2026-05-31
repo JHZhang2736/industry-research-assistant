@@ -174,4 +174,62 @@ def test_reporter_includes_claim_diagnostics(tmp_path: Path):
     assert "## Claim Diagnostics" in md
     assert "Unsupported market claim." in md
     assert "No matching evidence." in md
-    assert "Supported claim." not in md
+    diagnostics = md.split("## Claim Diagnostics", 1)[1]
+    assert "/ `c2`" not in diagnostics
+
+
+def test_reporter_handles_low_confidence_without_std(tmp_path: Path):
+    case = make_case_result("q001", {"coherence": 8.0})
+    case.results[0].low_confidence = True
+    r = Reporter(out_dir=str(tmp_path))
+
+    paths = r.write(
+        run_id="run-low-conf",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=[case],
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "## Low-confidence Cases" in md
+    assert "std=?" in md
+
+
+def test_reporter_sanitizes_claim_diagnostics_inline_text(tmp_path: Path):
+    case = make_case_result("q001", {"claim_support_rate": 0.0})
+    case.artifact = EvalArtifact(
+        claims=[
+            AtomicClaim(
+                id="c1",
+                text="Unsupported\nclaim with `tick`.",
+                section_id="s1",
+                importance="high",
+            ),
+        ],
+        verdicts=[
+            ClaimVerdict(
+                claim_id="c1",
+                supported=False,
+                reason="Line one\r\nLine two with `tick`.",
+            ),
+        ],
+    )
+    r = Reporter(out_dir=str(tmp_path))
+
+    paths = r.write(
+        run_id="run-claim-inline",
+        suite="full",
+        git_commit="abc",
+        started_at=datetime(2026, 5, 26),
+        finished_at=datetime(2026, 5, 26),
+        case_results=[case],
+        langsmith_url=None,
+    )
+
+    md = Path(paths["markdown"]).read_text(encoding="utf-8")
+    diagnostics = md.split("## Claim Diagnostics", 1)[1]
+    assert "Unsupported claim with \\`tick\\`." in diagnostics
+    assert "Line one Line two with \\`tick\\`." in diagnostics

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import statistics
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,17 @@ _SCORE_GROUPS = {
         "latency",
     ],
 }
+
+
+def _format_std(value) -> str:
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}"
+    return "?"
+
+
+def _inline_markdown(value) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text.replace("`", "\\`")
 
 
 class Reporter:
@@ -142,7 +154,7 @@ class Reporter:
                     individual = " / ".join(
                         f"{o.get('judge')}={o.get('score')}" for o in (r.raw_judge_outputs or [])
                     )
-                    low_conf_rows.append(f"- `{c.case.id}` / **{r.evaluator_name}** std={r.metadata.get('std', '?'):.2f}: {individual}")
+                    low_conf_rows.append(f"- `{c.case.id}` / **{r.evaluator_name}** std={_format_std(r.metadata.get('std'))}: {individual}")
         if low_conf_rows:
             md.append("## Low-confidence Cases (judge variance high — manual review recommended)")
             md.append("")
@@ -165,9 +177,9 @@ class Reporter:
                     continue
                 claim_lines.append(
                     f"- `{c.case.id}` / `{getattr(claim, 'id', '?')}` "
-                    f"({getattr(claim, 'importance', 'unknown')}): "
-                    f"{getattr(claim, 'text', '')} "
-                    f"Reason: {getattr(verdict, 'reason', '')}"
+                    f"({_inline_markdown(getattr(claim, 'importance', 'unknown'))}): "
+                    f"{_inline_markdown(getattr(claim, 'text', ''))} "
+                    f"Reason: {_inline_markdown(getattr(verdict, 'reason', ''))}"
                 )
         if claim_lines:
             md.append("## Claim Diagnostics")
