@@ -22,13 +22,15 @@ class EvidenceIndexBuilder:
     def build(self, state: dict[str, Any]) -> list[EvidenceItem]:
         items: list[EvidenceItem] = []
         seen: set[tuple[str, str]] = set()
+        used_ids: set[str] = set()
 
-        for fact in state.get("facts") or []:
+        for index, fact in enumerate(state.get("facts") or [], start=1):
             self._append(
                 items,
                 seen,
+                used_ids,
                 EvidenceItem(
-                    id=str(fact.get("id") or f"fact_{len(items) + 1}"),
+                    id=self._unique_id(str(fact.get("id") or f"fact_{index}"), used_ids),
                     text=self._truncate(fact.get("content") or fact.get("text") or ""),
                     source_name=str(fact.get("source_name") or ""),
                     source_url=str(fact.get("source_url") or ""),
@@ -37,34 +39,36 @@ class EvidenceIndexBuilder:
                 ),
             )
 
-        for ref in state.get("references") or []:
-            ref_id = ref.get("id") or len(items) + 1
+        for index, ref in enumerate(state.get("references") or [], start=1):
+            ref_id = ref.get("id") or index
             self._append(
                 items,
                 seen,
+                used_ids,
                 EvidenceItem(
-                    id=f"ref_{ref_id}",
-                    text=self._truncate(
+                    id=self._unique_id(f"ref_{ref_id}", used_ids),
+                    text=self._truncate(self._reference_text(ref)),
+                    source_name=str(
                         ref.get("title")
                         or ref.get("name")
-                        or ref.get("snippet")
-                        or ref.get("url")
+                        or ref.get("source")
+                        or ref.get("marker")
                         or ""
                     ),
-                    source_name=str(ref.get("title") or ref.get("name") or ""),
                     source_url=str(ref.get("url") or ref.get("source_url") or ""),
                     source_type=str(ref.get("source_type") or "reference"),
                     credibility_score=ref.get("credibility_score"),
                 ),
             )
 
-        for source in self._raw_sources(state):
-            source_id = source.get("id") or len(items) + 1
+        for index, source in enumerate(self._raw_sources(state), start=1):
+            source_id = source.get("id") or index
             self._append(
                 items,
                 seen,
+                used_ids,
                 EvidenceItem(
-                    id=f"source_{source_id}",
+                    id=self._unique_id(f"source_{source_id}", used_ids),
                     text=self._truncate(
                         source.get("content")
                         or source.get("text")
@@ -85,6 +89,7 @@ class EvidenceIndexBuilder:
         self,
         items: list[EvidenceItem],
         seen: set[tuple[str, str]],
+        used_ids: set[str],
         item: EvidenceItem,
     ) -> None:
         if len(items) >= self.max_items or not item.text:
@@ -93,10 +98,29 @@ class EvidenceIndexBuilder:
         if key in seen:
             return
         seen.add(key)
+        used_ids.add(item.id)
         items.append(item)
 
     def _truncate(self, text: Any) -> str:
         return str(text)[: self.item_chars]
+
+    @staticmethod
+    def _reference_text(ref: dict[str, Any]) -> str:
+        label = ref.get("title") or ref.get("name") or ref.get("source") or ref.get("snippet")
+        marker = ref.get("marker")
+        if marker and label:
+            return f"{marker} {label}"
+        return str(label or marker or ref.get("url") or ref.get("source_url") or "")
+
+    @staticmethod
+    def _unique_id(base_id: str, used_ids: set[str]) -> str:
+        if base_id not in used_ids:
+            return base_id
+
+        suffix = 2
+        while f"{base_id}_{suffix}" in used_ids:
+            suffix += 1
+        return f"{base_id}_{suffix}"
 
     @staticmethod
     def _normalized_text_prefix(text: str) -> str:

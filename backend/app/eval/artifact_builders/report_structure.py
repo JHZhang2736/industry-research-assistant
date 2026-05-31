@@ -8,7 +8,7 @@ from app.eval.settings import REPORT_CHARS
 
 REFERENCE_TITLES = {"references", "参考文献", "引用", "来源"}
 HEADING_RE = re.compile(r"^(#{2,3})\s+(.+?)\s*$", re.MULTILINE)
-CITATION_RE = re.compile(r"\[([0-9][0-9,\-\s]*)\]")
+CITATION_RE = re.compile(r"\[([0-9][0-9,\-\s]*)\](?!\()")
 
 
 def extract_citation_ids(text: str) -> list[str]:
@@ -33,9 +33,16 @@ def extract_citation_ids(text: str) -> list[str]:
 
 
 def strip_reference_section(report: str) -> str:
-    for match in HEADING_RE.finditer(report):
+    headings = list(HEADING_RE.finditer(report))
+    for index, match in enumerate(headings):
         title = _normalize_heading_title(match.group(2))
-        if title in REFERENCE_TITLES:
+        following_text = report[match.end() :].strip()
+        is_terminal_heading = index == len(headings) - 1
+        if (
+            title in REFERENCE_TITLES
+            and is_terminal_heading
+            and _looks_like_reference_list(following_text)
+        ):
             return report[: match.start()].rstrip()
     return report
 
@@ -80,3 +87,14 @@ def _append_unique(items: list[str], seen: set[str], value: str) -> None:
 
 def _normalize_heading_title(title: str) -> str:
     return title.strip().strip(":：").casefold()
+
+
+def _looks_like_reference_list(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    reference_lines = 0
+    for line in lines:
+        if re.match(r"^(\[\d+\]|\d+[\.\)]|[-*]\s+)", line):
+            reference_lines += 1
+    return reference_lines > 0

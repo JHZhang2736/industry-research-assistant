@@ -50,3 +50,35 @@ def test_evidence_builder_truncates_text_and_limits_count():
 
     assert len(items) == 2
     assert len(items[0].text) == 100
+
+
+def test_evidence_builder_uses_writer_reference_source_and_marker():
+    state = {
+        "references": [
+            {
+                "marker": "[7]",
+                "source": "CAAM annual release",
+                "url": "https://example.com/caam",
+            }
+        ]
+    }
+
+    items = EvidenceIndexBuilder(max_items=10).build(state)
+
+    assert items[0].id == "ref_1"
+    assert items[0].text == "[7] CAAM annual release"
+    assert items[0].source_name == "CAAM annual release"
+
+
+def test_evidence_builder_fallback_fact_ids_use_original_position_after_dedup():
+    state = {
+        "facts": [
+            {"content": "Duplicate fact.", "source_url": "https://example.com/a"},
+            {"content": "Duplicate fact.", "source_url": "https://example.com/a"},
+            {"content": "Unique fact.", "source_url": "https://example.com/b"},
+        ]
+    }
+
+    items = EvidenceIndexBuilder(max_items=10).build(state)
+
+    assert [item.id for item in items] == ["fact_1", "fact_3"]
