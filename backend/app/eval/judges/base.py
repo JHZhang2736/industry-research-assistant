@@ -25,7 +25,7 @@ from app.eval.settings import (
     JUDGE_RETRY_ATTEMPTS,
     JudgeConfig,
 )
-from app.eval.types import JudgeScore
+from app.eval.types import JudgeScore, StructuredJudgeResult
 
 logger = logging.getLogger("eval.judge")
 
@@ -118,6 +118,39 @@ class JudgeClient:
                 judge_name=self.cfg.name,
                 score=None,
                 reasoning="",
+                failed=True,
+                error=str(e),
+            )
+
+    async def call_structured(self, prompt: str, system_prompt: str) -> StructuredJudgeResult:
+        """Call the judge for raw structured output. Always returns StructuredJudgeResult."""
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(JUDGE_RETRY_ATTEMPTS),
+                wait=wait_exponential(multiplier=1, min=1, max=16),
+                retry=retry_if_exception_type((APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)),
+                reraise=True,
+            ):
+                with attempt:
+                    async with self._limiter:
+                        resp = await self._client.chat.completions.create(
+                            model=self.cfg.model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": prompt},
+                            ],
+                            temperature=0.0,
+                        )
+                    content = resp.choices[0].message.content or ""
+                    return StructuredJudgeResult(
+                        judge_name=self.cfg.name,
+                        content=content,
+                    )
+        except Exception as e:
+            logger.warning(f"[{self.cfg.name}] structured api failed after retries: {e}")
+            return StructuredJudgeResult(
+                judge_name=self.cfg.name,
+                content="",
                 failed=True,
                 error=str(e),
             )

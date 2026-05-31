@@ -7,13 +7,14 @@ import statistics
 from typing import Protocol
 
 from app.eval.settings import LOW_CONFIDENCE_STD_THRESHOLD
-from app.eval.types import EnsembleResult, JudgeScore
+from app.eval.types import EnsembleResult, JudgeScore, StructuredJudgeResult
 
 logger = logging.getLogger("eval.ensemble")
 
 
 class _JudgeProtocol(Protocol):
     async def call_judge(self, prompt: str) -> JudgeScore: ...
+    async def call_structured(self, prompt: str, system_prompt: str) -> StructuredJudgeResult: ...
 
 
 class EnsembleJudge:
@@ -69,3 +70,25 @@ class EnsembleJudge:
             low_confidence=std > LOW_CONFIDENCE_STD_THRESHOLD,
             partial=len(valid) < len(self.clients),
         )
+
+    async def generate_structured(self, prompt: str, system_prompt: str) -> StructuredJudgeResult:
+        return await self.clients[0].call_structured(prompt, system_prompt=system_prompt)
+
+    async def generate_structured_all(self, prompt: str, system_prompt: str) -> list[StructuredJudgeResult]:
+        raw = await asyncio.gather(
+            *[c.call_structured(prompt, system_prompt=system_prompt) for c in self.clients],
+            return_exceptions=True,
+        )
+
+        results: list[StructuredJudgeResult] = []
+        for r in raw:
+            if isinstance(r, StructuredJudgeResult):
+                results.append(r)
+            else:
+                results.append(StructuredJudgeResult(
+                    judge_name="unknown",
+                    content="",
+                    failed=True,
+                    error=str(r),
+                ))
+        return results
