@@ -16,20 +16,6 @@ _SYSTEM_PROMPT = (
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "claim_verification.md"
 
 
-def _install_artifact_constructor_defaults() -> None:
-    """Keep new builder tests compatible without editing shared artifacts."""
-    atomic_defaults = AtomicClaim.__init__.__defaults__ or ()
-    if len(atomic_defaults) == 2:
-        AtomicClaim.__init__.__defaults__ = ("", "medium", *atomic_defaults)
-
-    evidence_defaults = EvidenceItem.__init__.__defaults__ or ()
-    if len(evidence_defaults) == 1:
-        EvidenceItem.__init__.__defaults__ = ("", "unknown", *evidence_defaults)
-
-
-_install_artifact_constructor_defaults()
-
-
 class ClaimVerificationBuilder:
     """Verify each claim against evidence with a structured judge."""
 
