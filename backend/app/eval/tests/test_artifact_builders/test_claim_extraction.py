@@ -54,6 +54,23 @@ async def test_claim_extraction_builder_defaults_sparse_items():
 
 
 @pytest.mark.asyncio
+async def test_claim_extraction_builder_uniquifies_duplicate_claim_ids():
+    judge = AsyncMock()
+    judge.generate_structured = AsyncMock(return_value=StructuredJudgeResult(
+        judge_name="qwen",
+        content='{"requirements":[],"claims":[{"id":"c1","text":"First claim."},{"id":"c1","text":"Second claim."},{"id":"c1","text":"Third claim."}]}',
+    ))
+
+    _, claims = await ClaimExtractionBuilder(max_claims=10).build(
+        query="Analyze market size",
+        sections=[],
+        judge=judge,
+    )
+
+    assert [claim.id for claim in claims] == ["c1", "c1_2", "c1_3"]
+
+
+@pytest.mark.asyncio
 async def test_claim_extraction_builder_rejects_bad_json():
     judge = AsyncMock()
     judge.generate_structured = AsyncMock(return_value=StructuredJudgeResult("qwen", "not json"))

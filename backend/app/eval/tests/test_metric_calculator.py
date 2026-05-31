@@ -98,6 +98,27 @@ def test_metric_calculator_records_artifact_errors():
     assert "claim_extraction" in by_name["claim_support_rate"].error
 
 
+def test_report_quality_error_does_not_suppress_claim_metrics():
+    artifact = EvalArtifact(
+        evidence=[make_evidence("ref_1")],
+        requirements=[QueryRequirement("r1", "market size", "high")],
+        claims=[AtomicClaim("c1", "Market size grew.", "s1", "high", ["1"], ["r1"])],
+        verdicts=[
+            ClaimVerdict("c1", True, reason="supported", evidence_ids=["ref_1"]),
+        ],
+        quality=ReportQualityScores(error="judge timeout", partial=True),
+        errors=["report_quality: judge timeout"],
+    )
+
+    results = MetricCalculator().calculate(make_ctx(), artifact)
+    by_name = {r.evaluator_name: r for r in results}
+
+    assert by_name["claim_support_rate"].score == 10.0
+    assert by_name["citation_verifiability"].score == pytest.approx(10.0)
+    assert by_name["relevance_coverage"].score == 10.0
+    assert by_name["completeness"].score == 10.0
+
+
 def test_missing_quality_dimensions_return_errors():
     artifact = EvalArtifact(quality=ReportQualityScores(coherence=8.0))
     results = MetricCalculator().calculate(make_ctx(), artifact)

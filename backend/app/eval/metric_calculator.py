@@ -25,33 +25,34 @@ class MetricCalculator:
     def calculate(self, ctx: EvalContext, artifact: EvalArtifact) -> list[EvalResult]:
         results: list[EvalResult] = []
 
-        if artifact.errors:
-            error = "upstream artifact error: " + "; ".join(artifact.errors)
-            results.extend(
-                EvalResult(evaluator_name=name, score=None, error=error)
-                for name in _CLAIM_METRICS
-            )
-        else:
-            results.extend(
-                [
-                    self._safe_result(
-                        "claim_support_rate",
-                        lambda: self._claim_support_rate(artifact),
-                    ),
-                    self._safe_result(
-                        "citation_verifiability",
-                        lambda: self._citation_verifiability(artifact),
-                    ),
-                    self._safe_result(
-                        "relevance_coverage",
-                        lambda: self._relevance_coverage(artifact),
-                    ),
-                    self._safe_result(
-                        "completeness",
-                        lambda: self._completeness(artifact),
-                    ),
-                ]
-            )
+        results.extend(
+            [
+                self._claim_metric_result(
+                    artifact,
+                    "claim_support_rate",
+                    ("claim_extraction", "claim_verification"),
+                    lambda: self._claim_support_rate(artifact),
+                ),
+                self._claim_metric_result(
+                    artifact,
+                    "citation_verifiability",
+                    ("claim_extraction", "claim_verification"),
+                    lambda: self._citation_verifiability(artifact),
+                ),
+                self._claim_metric_result(
+                    artifact,
+                    "relevance_coverage",
+                    ("claim_extraction",),
+                    lambda: self._relevance_coverage(artifact),
+                ),
+                self._claim_metric_result(
+                    artifact,
+                    "completeness",
+                    ("claim_extraction", "claim_verification"),
+                    lambda: self._completeness(artifact),
+                ),
+            ]
+        )
 
         results.extend(self._quality_metrics(artifact))
         critic_loop = self._safe_result("critic_loop", lambda: self._critic_loop(ctx))
@@ -71,6 +72,22 @@ class MetricCalculator:
             ]
         )
         return results
+
+    def _claim_metric_result(
+        self,
+        artifact: EvalArtifact,
+        evaluator_name: str,
+        blocking_components: tuple[str, ...],
+        calculate: Callable[[], EvalResult],
+    ) -> EvalResult:
+        blocking_errors = _component_errors(artifact.errors, blocking_components)
+        if blocking_errors:
+            return EvalResult(
+                evaluator_name=evaluator_name,
+                score=None,
+                error="upstream artifact error: " + "; ".join(blocking_errors),
+            )
+        return self._safe_result(evaluator_name, calculate)
 
     def _safe_result(
         self,
@@ -389,6 +406,11 @@ def _covered_requirement_ids(claims: list[AtomicClaim]) -> set[str]:
         for claim in claims
         for requirement_id in _as_list(claim.requirement_ids)
     }
+
+
+def _component_errors(errors: list[str] | None, components: tuple[str, ...]) -> list[str]:
+    prefixes = tuple(f"{component}:" for component in components)
+    return [error for error in (errors or []) if str(error).startswith(prefixes)]
 
 
 def _as_list(value: object) -> list:

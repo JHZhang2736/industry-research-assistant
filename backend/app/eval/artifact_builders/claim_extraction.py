@@ -75,15 +75,17 @@ def _normalize_requirements(items: list[Any]) -> list[QueryRequirement]:
 
 def _normalize_claims(items: list[Any]) -> list[AtomicClaim]:
     claims: list[AtomicClaim] = []
+    used_ids: set[str] = set()
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             continue
         text = str(item.get("text") or "").strip()
         if not text:
             continue
+        claim_id = _unique_id(str(item.get("id") or f"c{index}"), used_ids)
         claims.append(
             AtomicClaim(
-                id=str(item.get("id") or f"c{index}"),
+                id=claim_id,
                 text=text,
                 section_id=str(item.get("section_id") or ""),
                 importance=str(item.get("importance") or "medium"),
@@ -92,6 +94,19 @@ def _normalize_claims(items: list[Any]) -> list[AtomicClaim]:
             )
         )
     return claims
+
+
+def _unique_id(base_id: str, used_ids: set[str]) -> str:
+    if base_id not in used_ids:
+        used_ids.add(base_id)
+        return base_id
+
+    suffix = 2
+    while f"{base_id}_{suffix}" in used_ids:
+        suffix += 1
+    unique_id = f"{base_id}_{suffix}"
+    used_ids.add(unique_id)
+    return unique_id
 
 
 def _string_list(value: Any) -> list[str]:
