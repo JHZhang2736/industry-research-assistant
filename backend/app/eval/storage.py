@@ -162,6 +162,10 @@ class EvalStorage:
 
             artifact = case_result.artifact
             c.execute(
+                "DELETE FROM eval_artifacts WHERE run_id=? AND case_id=?",
+                (run_id, c_id),
+            )
+            c.execute(
                 "DELETE FROM claim_verdicts WHERE run_id=? AND case_id=?",
                 (run_id, c_id),
             )

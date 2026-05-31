@@ -148,7 +148,7 @@ def test_storage_save_idempotent(db_path: str):
     conn.close()
 
 
-def test_storage_clears_claim_verdicts_when_artifact_removed(db_path: str):
+def test_storage_clears_artifact_rows_when_artifact_removed(db_path: str):
     s = EvalStorage(db_path)
     s.init_schema()
     s.save_run_start("run-3", "full", datetime(2026, 5, 26), "abc", {})
@@ -184,4 +184,8 @@ def test_storage_clears_claim_verdicts_when_artifact_removed(db_path: str):
         "SELECT COUNT(*) FROM claim_verdicts WHERE run_id='run-3' AND case_id='q003'"
     ).fetchone()[0]
     assert claim_n == 0
+    artifact_n = conn.execute(
+        "SELECT COUNT(*) FROM eval_artifacts WHERE run_id='run-3' AND case_id='q003'"
+    ).fetchone()[0]
+    assert artifact_n == 0
     conn.close()
