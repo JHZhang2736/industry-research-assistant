@@ -48,3 +48,17 @@ def detect_injection(text: str) -> InjectionVerdict:
     matched = [name for name, pat in _INJECTION_PATTERNS if pat.search(text)]
     score = len(matched) / len(_INJECTION_PATTERNS)
     return InjectionVerdict(flagged=bool(matched), score=score, matched_patterns=matched)
+
+
+_BOUNDARY_RE = re.compile(r"</?\s*EXTERNAL_DATA[^>\n]*>", re.IGNORECASE)
+
+
+def wrap_untrusted(text: str, source_id: str) -> str:
+    """把不可信内容包进带随机 nonce 的隔离块，并中和内嵌的伪造边界标记。"""
+    nonce = secrets.token_hex(4)
+    safe = _BOUNDARY_RE.sub("[已移除标记]", text or "")
+    return (
+        f'<EXTERNAL_DATA id="{source_id}" nonce="{nonce}">\n'
+        f"{safe}\n"
+        f'</EXTERNAL_DATA nonce="{nonce}">'
+    )
