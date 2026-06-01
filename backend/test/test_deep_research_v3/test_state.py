@@ -97,3 +97,10 @@ def test_research_state_user_id_defaults_empty():
 def test_research_state_recalled_memory_default_empty():
     state = create_initial_state(query="q", session_id="s")
     assert state["recalled_memory"] == {}
+
+
+def test_research_state_critic_loop_fields_default_empty():
+    state = create_initial_state(query="q", session_id="s")
+    assert state["review_history"] == []
+    assert state["revision_context_by_section"] == {}
+    assert state["critic_diagnostics"] == []
