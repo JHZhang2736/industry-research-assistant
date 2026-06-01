@@ -401,8 +401,17 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
                 content = output.get("content", "")
                 if sec_id:
                     before_content = merged_draft_sections.get(sec_id, "")
+                    if output.get("revision_failed") is True:
+                        content = before_content
                     merged_draft_sections[sec_id] = content
-                    if output.get("addressed_issue_ids") or output.get("unable_to_address"):
+
+                    revision_keys = {
+                        "addressed_issue_ids",
+                        "unable_to_address",
+                        "changes_made",
+                        "revision_failed",
+                    }
+                    if any(key in output for key in revision_keys):
                         diagnostic = {
                             "type": "writer_revision",
                             "section_id": sec_id,
