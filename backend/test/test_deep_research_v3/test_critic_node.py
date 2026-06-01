@@ -15,6 +15,24 @@ def critic():
     )
 
 
+def test_critic_prompt_requests_structured_review_fields():
+    prompt = CriticMaster.REVIEW_PROMPT
+
+    assert "dimension_scores" in prompt
+    assert "resolved_issue_ids" in prompt
+    assert "same_as_issue_id" in prompt
+    assert "acceptance_criteria" in prompt
+    for dimension in [
+        "factual_support",
+        "citation_integrity",
+        "coverage",
+        "reasoning",
+        "freshness",
+        "actionability",
+    ]:
+        assert dimension in prompt
+
+
 @pytest.mark.asyncio
 async def test_critic_outputs_suggested_actions_field(critic, monkeypatch):
     """Critic 输出新字段 suggested_actions: list[str]"""
@@ -107,6 +125,30 @@ async def test_critic_dimension_scores_drive_weighted_quality(critic, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_critic_partial_dimension_scores_falls_back_to_quality_score(critic, monkeypatch):
+    mock_response = json.dumps({
+        "dimension_scores": {
+            "factual_support": 4,
+        },
+        "quality_score": 7.3,
+        "verdict": "pass",
+        "critic_feedback": [],
+        "unresolved_issues": 0,
+        "suggested_actions": [],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(critic, "call_llm", AsyncMock(return_value=mock_response))
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "内容"}
+
+    result = await critic.process(state)
+
+    assert result["quality_score"] == 7.3
+    assert result["dimension_scores"] == {}
+
+
+@pytest.mark.asyncio
 async def test_critic_preserves_repeated_issue_id_with_same_as(critic, monkeypatch):
     mock_response = json.dumps({
         "quality_score": 4.5,
@@ -142,3 +184,41 @@ async def test_critic_preserves_repeated_issue_id_with_same_as(critic, monkeypat
 
     assert result["critic_feedback"][0]["id"] == "issue_old"
     assert result["critic_feedback"][0]["resolved"] is False
+
+
+@pytest.mark.asyncio
+async def test_critic_preserves_previously_resolved_feedback(critic, monkeypatch):
+    mock_response = json.dumps({
+        "quality_score": 4.5,
+        "verdict": "needs_revision",
+        "critic_feedback": [{
+            "id": "issue_new",
+            "target_section": "sec_1",
+            "issue_type": "missing_source",
+            "severity": "major",
+            "description": "缺少来源",
+            "suggestion": "补充引用",
+            "acceptance_criteria": ["至少新增一个来源"],
+        }],
+        "suggested_actions": ["retry_search:sec_1"],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(critic, "call_llm", AsyncMock(return_value=mock_response))
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "内容"}
+    state["critic_feedback"] = [{
+        "id": "issue_resolved",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "severity": "major",
+        "description": "旧问题",
+        "suggestion": "已处理",
+        "resolved": True,
+    }]
+
+    result = await critic.process(state)
+
+    feedback_by_id = {item["id"]: item for item in result["critic_feedback"]}
+    assert feedback_by_id["issue_resolved"]["resolved"] is True
+    assert feedback_by_id["issue_new"]["resolved"] is False

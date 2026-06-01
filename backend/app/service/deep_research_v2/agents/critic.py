@@ -66,16 +66,27 @@ class CriticMaster(BaseAgent):
 ```json
 {{
     "quality_score": 1-10 的浮点数,
+    "dimension_scores": {{
+        "factual_support": 1-10,      // 权重 0.30：事实和证据支撑是否充分
+        "citation_integrity": 1-10,   // 权重 0.20：引用是否存在、可用并支撑相邻论断
+        "coverage": 1-10,             // 权重 0.15：是否覆盖大纲和用户问题
+        "reasoning": 1-10,            // 权重 0.15：论证链是否清晰、一致
+        "freshness": 1-10,            // 权重 0.10：时效性要求是否满足
+        "actionability": 1-10         // 权重 0.10：反馈是否具体可执行
+    }},
     "verdict": "pass" | "needs_revision" | "needs_re_research",
     "summary": "整体评估摘要",
+    "resolved_issue_ids": ["本轮确认已经解决的历史 issue id"],
     "critic_feedback": [
         {{
             "id": "issue_xxx",
+            "same_as_issue_id": "如果这是历史未解决问题的延续，填写旧 issue id；否则省略",
             "target_section": "章节ID或'全局'",
             "issue_type": "missing_source/logic_error/bias/hallucination/outdated/incomplete",
             "severity": "critical/major/minor",
             "description": "问题详细描述",
-            "suggestion": "具体的修改建议"
+            "suggestion": "具体的修改建议",
+            "acceptance_criteria": ["critical/major 问题必须给出可验证的验收标准"]
         }}
     ],
     "unresolved_issues": 严重/重大问题计数（整数）,
@@ -226,10 +237,12 @@ class CriticMaster(BaseAgent):
             return {}
         scores: Dict[str, float] = {}
         for key in self.DIMENSION_WEIGHTS:
+            if key not in value:
+                return {}
             try:
-                scores[key] = max(0.0, min(10.0, float(value.get(key, 0.0))))
+                scores[key] = max(0.0, min(10.0, float(value[key])))
             except (TypeError, ValueError):
-                scores[key] = 0.0
+                return {}
         return scores
 
     def _quality_from_dimensions(
@@ -262,7 +275,7 @@ class CriticMaster(BaseAgent):
 
         merged: List[Dict[str, Any]] = []
         for issue_id, previous in previous_by_id.items():
-            if issue_id in resolved_ids:
+            if issue_id in resolved_ids or previous.get("resolved") is True:
                 previous["resolved"] = True
                 merged.append(previous)
 
