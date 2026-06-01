@@ -162,9 +162,9 @@ async def test_critic_dimension_scores_drive_weighted_quality(critic, monkeypatc
 
     result = await critic.process(state)
 
-    assert result["quality_score"] == pytest.approx(6.05)
+    assert result["quality_score"] == pytest.approx(5.85)
     assert result["dimension_scores"]["factual_support"] == 4.0
-    assert result["review_history"][0]["quality_score"] == pytest.approx(6.05)
+    assert result["review_history"][0]["quality_score"] == pytest.approx(5.85)
     assert result["review_history"][0]["input_snapshot"]["draft_hash_by_section"]["sec_1"].startswith("sha256:")
 
 
@@ -1437,4 +1437,3 @@ Verification:
 
 - Every behavior change has a failing test first.
 - All tests are mocked/offline and do not require LLM or search network calls.
-
