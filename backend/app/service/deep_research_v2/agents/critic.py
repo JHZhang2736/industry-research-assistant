@@ -56,6 +56,10 @@ class CriticMaster(BaseAgent):
 ### 使用的数据点
 {data_points}
 
+## 历史 Critic 问题
+以下是上一轮或历史 Critic 反馈。你必须用这些 id 判断问题是否已经解决，仍然存在时用 same_as_issue_id 关联旧 id，已经解决时放入 resolved_issue_ids。
+{previous_feedback}
+
 ## 任务
 逐条审核上述内容，找出所有问题。你必须扮演一个"找茬专家"的角色。
 
@@ -456,12 +460,28 @@ class CriticMaster(BaseAgent):
         for section in state["outline"]:
             outline_summary.append(f"- {section.get('id')}: {section.get('title')} ({section.get('status', 'pending')})")
 
+        previous_feedback = []
+        for issue in state.get("critic_feedback", []) or []:
+            if not isinstance(issue, dict):
+                continue
+            criteria = issue.get("acceptance_criteria", []) or []
+            criteria_text = "; ".join(str(item) for item in criteria) if criteria else "none"
+            previous_feedback.append(
+                f"- id={issue.get('id')}; "
+                f"target_section={issue.get('target_section')}; "
+                f"severity={issue.get('severity')}; "
+                f"resolved={issue.get('resolved', False)}; "
+                f"description={issue.get('description', '')}; "
+                f"acceptance_criteria={criteria_text}"
+            )
+
         prompt = self.REVIEW_PROMPT.format(
             query=state["query"],
             outline="\n".join(outline_summary),
             draft_content=draft_content[:8000],  # 限制长度
             facts="\n".join(facts_summary) if facts_summary else "（暂无事实记录）",
-            data_points="\n".join(data_summary) if data_summary else "（暂无数据点）"
+            data_points="\n".join(data_summary) if data_summary else "（暂无数据点）",
+            previous_feedback="\n".join(previous_feedback) if previous_feedback else "none",
         )
 
         self.logger.info(f"[CriticMaster] 调用 LLM 进行审核...")

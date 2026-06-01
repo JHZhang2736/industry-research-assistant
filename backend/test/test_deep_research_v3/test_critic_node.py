@@ -31,6 +31,47 @@ def test_critic_prompt_requests_structured_review_fields():
         "actionability",
     ]:
         assert dimension in prompt
+    for weight in CriticMaster.DIMENSION_WEIGHTS.values():
+        assert f"{weight:.2f}" in prompt
+
+
+@pytest.mark.asyncio
+async def test_critic_prompt_includes_prior_issue_context(critic, monkeypatch):
+    captured = {}
+
+    async def fake_call_llm(*, user_prompt, **kwargs):
+        captured["user_prompt"] = user_prompt
+        return json.dumps({
+            "quality_score": 8.0,
+            "verdict": "pass",
+            "critic_feedback": [],
+            "unresolved_issues": 0,
+            "suggested_actions": [],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(critic, "call_llm", fake_call_llm)
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "内容"}
+    state["critic_feedback"] = [{
+        "id": "issue_prior",
+        "target_section": "sec_1",
+        "severity": "major",
+        "resolved": False,
+        "description": "逻辑跳跃",
+        "acceptance_criteria": ["解释因果关系"],
+    }]
+
+    await critic.process(state)
+
+    prompt = captured["user_prompt"]
+    assert "issue_prior" in prompt
+    assert "sec_1" in prompt
+    assert "major" in prompt
+    assert "resolved=False" in prompt
+    assert "逻辑跳跃" in prompt
+    assert "解释因果关系" in prompt
 
 
 @pytest.mark.asyncio
