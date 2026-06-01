@@ -19,6 +19,7 @@ class Replanner(BaseAgent):
     """Rule-driven replanner for section repair actions."""
 
     SUPPORTED_ACTIONS = {"retry_search", "rewrite", "add_data"}
+    ACTION_PRECEDENCE = {"rewrite": 1, "retry_search": 2, "add_data": 3}
 
     def __init__(self, llm_api_key: str, llm_base_url: str, model: str = "deepseek-v3.2"):
         super().__init__(
@@ -60,11 +61,11 @@ class Replanner(BaseAgent):
     ) -> Dict[str, Dict[str, Any]]:
         contexts: Dict[str, Dict[str, Any]] = {}
         existing = state.get("revision_context_by_section", {}) or {}
-        contexts.update(existing)
         grouped = self._targetable_feedback_by_section(state)
         review_id = self._latest_review_id(state)
         draft_sections = state.get("draft_sections", {}) or {}
-        for section_id, issues in grouped.items():
+        for section_id, raw_issues in grouped.items():
+            issues = [dict(issue) for issue in raw_issues]
             required_actions = []
             for issue in issues:
                 issue_type = issue.get("issue_type", "")
@@ -74,14 +75,19 @@ class Replanner(BaseAgent):
                     required_actions.append("rewrite")
                 else:
                     required_actions.append("rewrite")
-            contexts[section_id] = {
+            context = {}
+            existing_context = existing.get(section_id)
+            if isinstance(existing_context, dict):
+                context.update(existing_context)
+            context.update({
                 "section_id": section_id,
                 "mode": "rewrite_with_feedback",
                 "source_review_id": review_id,
                 "issues": issues,
                 "required_actions": list(dict.fromkeys(required_actions)),
                 "previous_content_hash": self._hash_text(draft_sections.get(section_id, "")),
-            }
+            })
+            contexts[section_id] = context
         return contexts
 
     def _derive_actions_from_feedback(self, state: ResearchState) -> List[str]:
@@ -98,20 +104,13 @@ class Replanner(BaseAgent):
                 actions.append(f"rewrite:{section_id}")
         return actions
 
-    async def process(
+    def _normalize_actions(
         self,
-        state: ResearchState,
         suggested_actions: List[str],
-    ) -> Dict[str, Any]:
-        """Generate repair plan steps from suggested actions or targetable feedback."""
-        replan_count = state.get("replan_count", 0) + 1
-        new_steps: List[Dict[str, Any]] = []
-        revision_contexts = self._build_revision_contexts(state)
-        if not suggested_actions:
-            suggested_actions = self._derive_actions_from_feedback(state)
-
-        outline = state.get("outline", [])
-        valid_section_ids = {s["id"] for s in outline}
+        valid_section_ids: set,
+    ) -> List[tuple]:
+        chosen_by_section: Dict[str, str] = {}
+        section_order: List[str] = []
 
         for action in suggested_actions:
             if ":" not in action:
@@ -127,6 +126,33 @@ class Replanner(BaseAgent):
                 logger.warning(f"replanner: unknown section '{target}'")
                 continue
 
+            if target not in chosen_by_section:
+                section_order.append(target)
+                chosen_by_section[target] = verb
+                continue
+
+            existing = chosen_by_section[target]
+            if self.ACTION_PRECEDENCE[verb] > self.ACTION_PRECEDENCE[existing]:
+                chosen_by_section[target] = verb
+
+        return [(chosen_by_section[section_id], section_id) for section_id in section_order]
+
+    async def process(
+        self,
+        state: ResearchState,
+        suggested_actions: List[str],
+    ) -> Dict[str, Any]:
+        """Generate repair plan steps from suggested actions or targetable feedback."""
+        replan_count = state.get("replan_count", 0) + 1
+        new_steps: List[Dict[str, Any]] = []
+        revision_contexts = self._build_revision_contexts(state)
+        if not suggested_actions:
+            suggested_actions = self._derive_actions_from_feedback(state)
+
+        outline = state.get("outline", [])
+        valid_section_ids = {s["id"] for s in outline}
+
+        for verb, target in self._normalize_actions(suggested_actions, valid_section_ids):
             new_steps.extend(self._action_to_steps(verb, target, state))
 
         self.add_message(

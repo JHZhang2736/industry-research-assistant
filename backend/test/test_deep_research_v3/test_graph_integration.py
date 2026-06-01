@@ -78,3 +78,28 @@ def test_route_after_replanner_at_max_returns_end():
     state["replan_count"] = 3
     state["fallback_triggered"] = False
     assert route_after_replanner(state) == "END"
+
+
+@pytest.mark.asyncio
+async def test_replanner_node_does_not_derive_actions_for_resolved_feedback(graph):
+    state = create_initial_state(query="test", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "Logic"}]
+    state["suggested_actions"] = []
+    state["revision_context_by_section"] = {
+        "sec_1": {
+            "section_id": "sec_1",
+            "mode": "rewrite_with_feedback",
+            "issues": [{"id": "old_issue"}],
+        }
+    }
+    state["critic_feedback"] = [{
+        "id": "old_issue",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "resolved": True,
+    }]
+
+    result = await graph._replanner_node(state)
+
+    assert result["plan"] == []
+    assert "sec_1" not in result["revision_context_by_section"]

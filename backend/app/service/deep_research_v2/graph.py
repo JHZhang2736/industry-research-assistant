@@ -563,40 +563,17 @@ class DeepResearchGraph:
         return result
 
     async def _replanner_node(self, state: ResearchState) -> Dict[str, Any]:
-        """replanner node 包装：把 suggested_actions 翻译成补救 plan
+        """Run Replanner with critic-suggested actions.
 
-        兜底逻辑：critic LLM 给低分但忘填 actions 时，从 critic_feedback 推导，
-        或退而对所有 section 做 retry_search，避免"判定需 replan 却无事可做"。
+        Replanner.process owns fallback action derivation and filters stale or
+        resolved feedback before producing repair steps.
         """
         self._maybe_cancel(state)
         self._emit_phase_start("replanning", "开始重规划...")
         logger.info("Executing Replanner node...")
 
         suggested = list(state.get("suggested_actions", []) or [])
-
-        if not suggested:
-            feedback = state.get("critic_feedback", []) or []
-            derived: List[str] = []
-            for fb in feedback:
-                target = fb.get("target_section", "") if isinstance(fb, dict) else ""
-                issue = fb.get("issue_type", "") if isinstance(fb, dict) else ""
-                if not target or target in ("全局", "global", ""):
-                    continue
-                if issue in ("missing_source", "outdated", "incomplete"):
-                    derived.append(f"retry_search:{target}")
-                elif issue in ("logic_error", "bias", "hallucination"):
-                    derived.append(f"rewrite:{target}")
-                else:
-                    derived.append(f"retry_search:{target}")
-            if derived:
-                suggested = list(dict.fromkeys(derived))  # 去重保序
-            else:
-                outline = state.get("outline", []) or []
-                suggested = [
-                    f"retry_search:{s.get('id')}"
-                    for s in outline if s.get("id")
-                ]
-            logger.info(f"Replanner fallback actions ({len(suggested)}): {suggested}")
+        logger.info(f"Replanner received suggested actions ({len(suggested)}): {suggested}")
 
         result = await self.replanner.process(state, suggested_actions=suggested)
         return result

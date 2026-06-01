@@ -60,6 +60,7 @@ async def test_replanner_builds_revision_context_for_missing_source(replanner):
     context = result["revision_context_by_section"]["sec_3"]
     assert context["source_review_id"] == "review_1"
     assert context["issues"][0]["id"] == "issue_1"
+    assert context["issues"][0] is not state["critic_feedback"][0]
     assert context["previous_content_hash"].startswith("sha256:")
 
 
@@ -82,6 +83,60 @@ async def test_replanner_builds_context_when_actions_empty_but_feedback_targetab
 
     assert [step["tool"] for step in result["plan"]] == ["write_section"]
     assert "sec_1" in result["revision_context_by_section"]
+
+
+@pytest.mark.asyncio
+async def test_replanner_drops_stale_context_for_resolved_feedback(replanner):
+    state = create_initial_state(query="测试主题", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "逻辑"}]
+    state["revision_context_by_section"] = {
+        "sec_1": {
+            "section_id": "sec_1",
+            "mode": "rewrite_with_feedback",
+            "issues": [{"id": "old_issue"}],
+        }
+    }
+    state["critic_feedback"] = [{
+        "id": "old_issue",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "resolved": True,
+    }]
+
+    result = await replanner.process(state=state, suggested_actions=[])
+
+    assert result["plan"] == []
+    assert "sec_1" not in result["revision_context_by_section"]
+
+
+@pytest.mark.asyncio
+async def test_replanner_retry_search_subsumes_rewrite_for_same_section(replanner):
+    state = create_initial_state(query="测试主题", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "逻辑"}]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["retry_search:sec_1", "rewrite:sec_1"],
+    )
+
+    tools = [step["tool"] for step in result["plan"]]
+    assert tools == ["search_section", "write_section"]
+    assert result["plan"][1]["depends_on"] == [result["plan"][0]["step_id"]]
+
+
+@pytest.mark.asyncio
+async def test_replanner_add_data_subsumes_rewrite_for_same_section(replanner):
+    state = create_initial_state(query="测试主题", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "逻辑"}]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["rewrite:sec_1", "add_data:sec_1"],
+    )
+
+    tools = [step["tool"] for step in result["plan"]]
+    assert tools == ["search_section", "analyze_facts", "write_section"]
+    assert result["plan"][2]["depends_on"] == [result["plan"][1]["step_id"]]
 
 
 @pytest.mark.asyncio
