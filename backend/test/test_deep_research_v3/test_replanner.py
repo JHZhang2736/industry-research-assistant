@@ -33,6 +33,58 @@ async def test_replanner_translates_actions_to_steps(replanner):
 
 
 @pytest.mark.asyncio
+async def test_replanner_builds_revision_context_for_missing_source(replanner):
+    state = create_initial_state(query="测试主题", session_id="sid_1")
+    state["outline"] = [{"id": "sec_3", "title": "市场规模"}]
+    state["draft_sections"] = {"sec_3": "原章节"}
+    state["review_history"] = [{"review_id": "review_1"}]
+    state["critic_feedback"] = [{
+        "id": "issue_1",
+        "target_section": "sec_3",
+        "issue_type": "missing_source",
+        "severity": "major",
+        "description": "市场规模缺少来源",
+        "suggestion": "补充来源",
+        "acceptance_criteria": ["新增一个来源"],
+        "resolved": False,
+    }]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["retry_search:sec_3"],
+    )
+
+    tools = [step["tool"] for step in result["plan"]]
+    assert tools == ["search_section", "write_section"]
+    assert result["plan"][1]["depends_on"] == [result["plan"][0]["step_id"]]
+    context = result["revision_context_by_section"]["sec_3"]
+    assert context["source_review_id"] == "review_1"
+    assert context["issues"][0]["id"] == "issue_1"
+    assert context["previous_content_hash"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_replanner_builds_context_when_actions_empty_but_feedback_targetable(replanner):
+    state = create_initial_state(query="测试主题", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "逻辑"}]
+    state["critic_feedback"] = [{
+        "id": "issue_logic",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "severity": "major",
+        "description": "逻辑跳跃",
+        "suggestion": "补齐因果链",
+        "acceptance_criteria": ["解释原因和结果"],
+        "resolved": False,
+    }]
+
+    result = await replanner.process(state=state, suggested_actions=[])
+
+    assert [step["tool"] for step in result["plan"]] == ["write_section"]
+    assert "sec_1" in result["revision_context_by_section"]
+
+
+@pytest.mark.asyncio
 async def test_replanner_handles_rewrite_action(replanner):
     """suggested_actions=['rewrite:sec_5'] → write_section step"""
     state = create_initial_state(query="测试", session_id="sid_1")
