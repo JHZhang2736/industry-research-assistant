@@ -279,13 +279,16 @@ class CriticMaster(BaseAgent):
 
         merged: List[Dict[str, Any]] = []
         for issue_id, previous in previous_by_id.items():
-            if issue_id in resolved_ids or previous.get("resolved") is True:
+            if issue_id in resolved_ids:
                 previous["resolved"] = True
-                merged.append(previous)
+            if previous.get("resolved") is True:
+                previous["resolved"] = True
+            merged.append(previous)
 
         for fb in parsed.get("critic_feedback", []) or []:
             if not isinstance(fb, dict):
                 continue
+            fb = dict(fb)
             same_as = fb.get("same_as_issue_id")
             if same_as and same_as in previous_by_id:
                 fb["id"] = same_as
@@ -306,6 +309,17 @@ class CriticMaster(BaseAgent):
             seen.add(key)
             unique.append(fb)
         return unique
+
+    def _count_unresolved_blocking_issues(
+        self,
+        feedback: List[Dict[str, Any]],
+    ) -> int:
+        return len([
+            issue for issue in feedback
+            if isinstance(issue, dict)
+            and not issue.get("resolved")
+            and issue.get("severity") in ("critical", "major")
+        ])
 
     async def process(self, state: ResearchState) -> Dict[str, Any]:
         """v3 节点形态：返回扁平 dict，不直接修改 state
@@ -334,14 +348,7 @@ class CriticMaster(BaseAgent):
             parsed.get("quality_score", 0.0),
         )
         feedback = self._normalize_feedback(state, parsed)
-        unresolved_count = parsed.get(
-            "unresolved_issues",
-            len([
-                i for i in feedback
-                if not i.get("resolved")
-                and i.get("severity") in ("critical", "major")
-            ]),
-        )
+        unresolved_count = self._count_unresolved_blocking_issues(feedback)
         review_id = parsed.get("review_id") or f"review_{uuid.uuid4().hex[:8]}"
         snapshot = self._build_input_snapshot(state)
         delta = self._build_delta_from_previous(state, snapshot, quality_score)

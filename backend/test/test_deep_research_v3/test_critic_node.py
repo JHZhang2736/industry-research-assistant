@@ -228,6 +228,65 @@ async def test_critic_preserves_repeated_issue_id_with_same_as(critic, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_critic_unresolved_count_uses_normalized_feedback(critic, monkeypatch):
+    mock_response = json.dumps({
+        "quality_score": 8.0,
+        "verdict": "pass",
+        "critic_feedback": [{
+            "id": "issue_major",
+            "target_section": "sec_1",
+            "issue_type": "logic_error",
+            "severity": "major",
+            "description": "Logic gap remains",
+            "suggestion": "Rewrite the argument",
+        }],
+        "unresolved_issues": 0,
+        "suggested_actions": [],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(critic, "call_llm", AsyncMock(return_value=mock_response))
+
+    state = create_initial_state(query="test", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "Section 1"}]
+    state["draft_sections"] = {"sec_1": "draft"}
+
+    result = await critic.process(state)
+
+    assert result["unresolved_issues"] == 1
+
+
+@pytest.mark.asyncio
+async def test_critic_preserves_omitted_previous_unresolved_issue(critic, monkeypatch):
+    mock_response = json.dumps({
+        "quality_score": 8.0,
+        "verdict": "pass",
+        "resolved_issue_ids": [],
+        "critic_feedback": [],
+        "unresolved_issues": 0,
+        "suggested_actions": [],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(critic, "call_llm", AsyncMock(return_value=mock_response))
+
+    state = create_initial_state(query="test", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "Section 1"}]
+    state["draft_sections"] = {"sec_1": "draft"}
+    state["critic_feedback"] = [{
+        "id": "issue_old",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "severity": "major",
+        "description": "Prior unresolved logic gap",
+        "suggestion": "Explain the causal chain",
+        "resolved": False,
+    }]
+
+    result = await critic.process(state)
+
+    feedback_by_id = {item["id"]: item for item in result["critic_feedback"]}
+    assert feedback_by_id["issue_old"]["resolved"] is False
+    assert result["unresolved_issues"] == 1
+
+
+@pytest.mark.asyncio
 async def test_critic_preserves_previously_resolved_feedback(critic, monkeypatch):
     mock_response = json.dumps({
         "quality_score": 4.5,

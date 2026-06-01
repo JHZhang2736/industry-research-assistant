@@ -44,6 +44,51 @@ def test_route_after_critic_pass_returns_end():
     assert route_after_critic(state) == "END"
 
 
+def test_route_after_critic_pass_with_low_score_replans():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "pass"
+    state["quality_score"] = 6.5
+    state["unresolved_issues"] = 0
+    state["suggested_actions"] = []
+    state["replan_count"] = 0
+
+    assert _route_after_critic_with_status(state) == ("replanner", "needs_revision")
+
+
+def test_route_after_critic_pass_with_unresolved_major_replans():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "pass"
+    state["quality_score"] = 8.5
+    state["unresolved_issues"] = 0
+    state["suggested_actions"] = []
+    state["critic_feedback"] = [{
+        "id": "issue_major",
+        "severity": "major",
+        "resolved": False,
+    }]
+    state["replan_count"] = 0
+
+    assert _route_after_critic_with_status(state) == ("replanner", "needs_revision")
+
+
+def test_route_after_critic_clean_pass_sets_passed_status():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "pass"
+    state["quality_score"] = 8.5
+    state["unresolved_issues"] = 0
+    state["suggested_actions"] = []
+    state["critic_feedback"] = []
+    state["replan_count"] = 0
+
+    assert _route_after_critic_with_status(state) == ("END", "passed")
+
+
 def test_route_after_critic_low_score_no_actions_still_replans():
     """新规则：critic 给低分但忘填 suggested_actions 也应触发 replanner"""
     from app.service.deep_research_v2.graph import route_after_critic

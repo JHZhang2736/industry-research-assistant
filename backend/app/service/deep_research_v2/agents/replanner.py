@@ -7,7 +7,7 @@ repair plan steps. This agent is rule-driven and does not call an LLM.
 import hashlib
 import logging
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
 from ..state import ResearchState
@@ -94,21 +94,27 @@ class Replanner(BaseAgent):
         actions: List[str] = []
         grouped = self._targetable_feedback_by_section(state)
         for section_id, issues in grouped.items():
-            needs_search = any(
-                issue.get("issue_type") in ("missing_source", "outdated", "incomplete")
-                for issue in issues
-            )
-            if needs_search:
-                actions.append(f"retry_search:{section_id}")
-            else:
-                actions.append(f"rewrite:{section_id}")
+            actions.append(f"{self._required_action_for_issues(issues)}:{section_id}")
         return actions
+
+    def _required_action_for_issues(self, issues: List[Dict[str, Any]]) -> str:
+        required = "rewrite"
+        for issue in issues:
+            issue_type = issue.get("issue_type", "")
+            if issue_type in ("missing_source", "outdated", "incomplete"):
+                required = "retry_search"
+            if issue_type == "missing_data":
+                return "add_data"
+        return required
 
     def _normalize_actions(
         self,
         suggested_actions: List[str],
         valid_section_ids: set,
+        targetable_feedback: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        has_critic_feedback: bool = False,
     ) -> List[tuple]:
+        targetable_feedback = targetable_feedback or {}
         chosen_by_section: Dict[str, str] = {}
         section_order: List[str] = []
 
@@ -125,6 +131,15 @@ class Replanner(BaseAgent):
             if target not in valid_section_ids:
                 logger.warning(f"replanner: unknown section '{target}'")
                 continue
+
+            if has_critic_feedback and target not in targetable_feedback:
+                logger.info(f"replanner: drop stale action '{action}' without unresolved feedback")
+                continue
+
+            if target in targetable_feedback:
+                required = self._required_action_for_issues(targetable_feedback[target])
+                if self.ACTION_PRECEDENCE[required] > self.ACTION_PRECEDENCE[verb]:
+                    verb = required
 
             if target not in chosen_by_section:
                 section_order.append(target)
@@ -146,13 +161,23 @@ class Replanner(BaseAgent):
         replan_count = state.get("replan_count", 0) + 1
         new_steps: List[Dict[str, Any]] = []
         revision_contexts = self._build_revision_contexts(state)
+        targetable_feedback = self._targetable_feedback_by_section(state)
+        has_critic_feedback = any(
+            isinstance(fb, dict) for fb in state.get("critic_feedback", []) or []
+        )
         if not suggested_actions:
             suggested_actions = self._derive_actions_from_feedback(state)
 
         outline = state.get("outline", [])
         valid_section_ids = {s["id"] for s in outline}
 
-        for verb, target in self._normalize_actions(suggested_actions, valid_section_ids):
+        normalized_actions = self._normalize_actions(
+            suggested_actions,
+            valid_section_ids,
+            targetable_feedback=targetable_feedback,
+            has_critic_feedback=has_critic_feedback,
+        )
+        for verb, target in normalized_actions:
             new_steps.extend(self._action_to_steps(verb, target, state))
 
         self.add_message(

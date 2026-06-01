@@ -110,6 +110,74 @@ async def test_replanner_drops_stale_context_for_resolved_feedback(replanner):
 
 
 @pytest.mark.asyncio
+async def test_replanner_drops_stale_suggested_action_for_resolved_feedback(replanner):
+    state = create_initial_state(query="test topic", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "Logic"}]
+    state["critic_feedback"] = [{
+        "id": "old_issue",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "severity": "major",
+        "resolved": True,
+    }]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["rewrite:sec_1"],
+    )
+
+    assert result["plan"] == []
+    assert result["revision_context_by_section"] == {}
+
+
+@pytest.mark.asyncio
+async def test_replanner_upgrades_rewrite_to_retry_search_for_missing_source(replanner):
+    state = create_initial_state(query="test topic", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "Market size"}]
+    state["critic_feedback"] = [{
+        "id": "issue_source",
+        "target_section": "sec_1",
+        "issue_type": "missing_source",
+        "severity": "major",
+        "description": "Market size claim lacks a source",
+        "suggestion": "Find and cite a source",
+        "resolved": False,
+    }]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["rewrite:sec_1"],
+    )
+
+    tools = [step["tool"] for step in result["plan"]]
+    assert tools == ["search_section", "write_section"]
+    assert result["plan"][1]["depends_on"] == [result["plan"][0]["step_id"]]
+
+
+@pytest.mark.asyncio
+async def test_replanner_keeps_valid_suggested_action_with_unresolved_feedback(replanner):
+    state = create_initial_state(query="test topic", session_id="sid_1")
+    state["outline"] = [{"id": "sec_1", "title": "Logic"}]
+    state["critic_feedback"] = [{
+        "id": "issue_logic",
+        "target_section": "sec_1",
+        "issue_type": "logic_error",
+        "severity": "major",
+        "description": "Argument skips a step",
+        "suggestion": "Rewrite the reasoning",
+        "resolved": False,
+    }]
+
+    result = await replanner.process(
+        state=state,
+        suggested_actions=["rewrite:sec_1"],
+    )
+
+    assert [step["tool"] for step in result["plan"]] == ["write_section"]
+    assert "sec_1" in result["revision_context_by_section"]
+
+
+@pytest.mark.asyncio
 async def test_replanner_retry_search_subsumes_rewrite_for_same_section(replanner):
     state = create_initial_state(query="测试主题", session_id="sid_1")
     state["outline"] = [{"id": "sec_1", "title": "逻辑"}]

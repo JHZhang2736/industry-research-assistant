@@ -163,6 +163,20 @@ def _only_minor_unresolved(state: ResearchState) -> bool:
     )
 
 
+def _has_blocking_unresolved(state: ResearchState) -> bool:
+    unresolved_count = int(state.get("unresolved_issues", 0) or 0)
+    if unresolved_count > 0:
+        return True
+
+    feedback = state.get("critic_feedback", []) or []
+    return any(
+        isinstance(item, dict)
+        and not item.get("resolved")
+        and item.get("severity") in ("critical", "major")
+        for item in feedback
+    )
+
+
 def _has_no_effective_revision(state: ResearchState) -> bool:
     history = state.get("review_history", []) or []
     meaningful_deltas = []
@@ -212,13 +226,10 @@ def _route_after_critic_with_status(state: ResearchState) -> tuple[str, str]:
         return "END", "max_replan_reached"
 
     verdict = (state.get("verdict") or "").lower()
-    if verdict == "pass":
-        return "END", "passed"
-
     suggested = state.get("suggested_actions", []) or []
-    unresolved = state.get("unresolved_issues", 0) or 0
     score = float(state.get("quality_score", 0.0) or 0.0)
     threshold = _quality_pass_threshold()
+    has_blocking_unresolved = _has_blocking_unresolved(state)
 
     if _has_no_effective_revision(state):
         return "END", "no_effective_revision"
@@ -226,7 +237,12 @@ def _route_after_critic_with_status(state: ResearchState) -> tuple[str, str]:
     if _only_minor_unresolved(state) and score >= threshold - 0.2:
         return "END", "passed_with_minor_warnings"
 
-    if suggested or unresolved > 0 or score < threshold or verdict in ("needs_revision", "needs_re_research"):
+    if (
+        suggested
+        or has_blocking_unresolved
+        or score < threshold
+        or verdict in ("needs_revision", "needs_re_research")
+    ):
         return "replanner", "needs_revision"
     return "END", "passed"
 
@@ -238,7 +254,7 @@ def route_after_critic(state: ResearchState) -> str:
     actions，那种情况也应该 replan。新规则：
 
     - 已达 MAX_REPLAN → END（兜底，防死循环）
-    - verdict == "pass" → END（即使有 actions 也信任 critic 的 pass 判断）
+    - verdict == "pass" 只有在分数达标且没有阻塞性未解决问题时才 END
     - 满足任一即视为"需要 replan"：
         * suggested_actions 非空
         * unresolved_issues > 0
