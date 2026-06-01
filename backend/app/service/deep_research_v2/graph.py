@@ -165,12 +165,20 @@ def _only_minor_unresolved(state: ResearchState) -> bool:
 
 def _has_no_effective_revision(state: ResearchState) -> bool:
     history = state.get("review_history", []) or []
-    if len(history) < 2:
-        return False
-    recent = history[-2:]
-    for entry in recent:
+    meaningful_deltas = []
+    for entry in history:
         delta = entry.get("delta_from_previous", {}) or {}
-        if abs(float(delta.get("score_delta") or 0.0)) >= 0.3:
+        score_delta = delta.get("score_delta")
+        if score_delta is None:
+            continue
+        meaningful_deltas.append(delta)
+    if len(meaningful_deltas) < 2:
+        return False
+    for delta in meaningful_deltas[-2:]:
+        score_delta = delta.get("score_delta")
+        if delta.get("final_report_changed") is True:
+            return False
+        if abs(float(score_delta or 0.0)) >= 0.3:
             return False
         if delta.get("changed_sections"):
             return False
@@ -197,6 +205,32 @@ def route_after_intent(state: ResearchState) -> str:
     return "deep_research"
 
 
+def _route_after_critic_with_status(state: ResearchState) -> tuple[str, str]:
+    """Return the next route and persistable critic loop status."""
+    replan_count = state.get("replan_count", 0)
+    if replan_count >= MAX_REPLAN:
+        return "END", "max_replan_reached"
+
+    verdict = (state.get("verdict") or "").lower()
+    if verdict == "pass":
+        return "END", "passed"
+
+    suggested = state.get("suggested_actions", []) or []
+    unresolved = state.get("unresolved_issues", 0) or 0
+    score = float(state.get("quality_score", 0.0) or 0.0)
+    threshold = _quality_pass_threshold()
+
+    if _has_no_effective_revision(state):
+        return "END", "no_effective_revision"
+
+    if _only_minor_unresolved(state) and score >= threshold - 0.2:
+        return "END", "passed_with_minor_warnings"
+
+    if suggested or unresolved > 0 or score < threshold or verdict in ("needs_revision", "needs_re_research"):
+        return "replanner", "needs_revision"
+    return "END", "passed"
+
+
 def route_after_critic(state: ResearchState) -> str:
     """critic node 之后的路由
 
@@ -211,34 +245,8 @@ def route_after_critic(state: ResearchState) -> str:
         * quality_score < 阈值
         * verdict 不是 "pass"
     """
-    replan_count = state.get("replan_count", 0)
-    if replan_count >= MAX_REPLAN:
-        state["critic_loop_status"] = "max_replan_reached"
-        return "END"
-
-    verdict = (state.get("verdict") or "").lower()
-    if verdict == "pass":
-        state["critic_loop_status"] = "passed"
-        return "END"
-
-    suggested = state.get("suggested_actions", []) or []
-    unresolved = state.get("unresolved_issues", 0) or 0
-    score = float(state.get("quality_score", 0.0) or 0.0)
-    threshold = _quality_pass_threshold()
-
-    if _has_no_effective_revision(state):
-        state["critic_loop_status"] = "no_effective_revision"
-        return "END"
-
-    if _only_minor_unresolved(state) and score >= threshold - 0.2:
-        state["critic_loop_status"] = "passed_with_minor_warnings"
-        return "END"
-
-    if suggested or unresolved > 0 or score < threshold or verdict in ("needs_revision", "needs_re_research"):
-        state["critic_loop_status"] = "needs_revision"
-        return "replanner"
-    state["critic_loop_status"] = "passed"
-    return "END"
+    route, _status = _route_after_critic_with_status(state)
+    return route
 
 
 def route_after_replanner(state: ResearchState) -> str:
@@ -593,12 +601,15 @@ class DeepResearchGraph:
             "status": "running",
         })
         result = await self.critic.process(state)
+        if not isinstance(result, dict):
+            result = {}
+        route_state = dict(state)
+        route_state.update(result)
+        _route, status = _route_after_critic_with_status(route_state)
+        result["critic_loop_status"] = status
         # 完成态：把 quality_score / unresolved 写入 stats（前端忽略未知字段）
-        if isinstance(result, dict):
-            quality = result.get("quality_score", 0.0)
-            unresolved = result.get("unresolved_issues", 0)
-        else:
-            quality, unresolved = 0.0, 0
+        quality = result.get("quality_score", 0.0)
+        unresolved = result.get("unresolved_issues", 0)
         self._emit_event("research_step", {
             "step_type": "reviewing",
             "title": "🔎 审核报告",

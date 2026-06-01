@@ -104,3 +104,4 @@ def test_research_state_critic_loop_fields_default_empty():
     assert state["review_history"] == []
     assert state["revision_context_by_section"] == {}
     assert state["critic_diagnostics"] == []
+    assert state["critic_loop_status"] == ""

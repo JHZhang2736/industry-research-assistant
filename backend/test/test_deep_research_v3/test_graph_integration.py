@@ -1,6 +1,7 @@
 """4-node 主图集成测试（mock LLM）"""
 import pytest
 import os
+from unittest.mock import AsyncMock
 from app.service.deep_research_v2.state import create_initial_state
 
 
@@ -110,7 +111,10 @@ async def test_replanner_node_does_not_derive_actions_for_resolved_feedback(grap
 
 
 def test_route_after_critic_no_effective_revision_returns_end():
-    from app.service.deep_research_v2.graph import route_after_critic
+    from app.service.deep_research_v2.graph import (
+        _route_after_critic_with_status,
+        route_after_critic,
+    )
     state = create_initial_state(query="test", session_id="s")
     state["verdict"] = "needs_revision"
     state["quality_score"] = 4.5
@@ -135,12 +139,18 @@ def test_route_after_critic_no_effective_revision_returns_end():
             },
         },
     ]
+    route, status = _route_after_critic_with_status(state)
+    assert route == "END"
+    assert status == "no_effective_revision"
     assert route_after_critic(state) == "END"
-    assert state["critic_loop_status"] == "no_effective_revision"
+    assert state["critic_loop_status"] == ""
 
 
 def test_route_after_critic_minor_near_threshold_passes_with_warnings():
-    from app.service.deep_research_v2.graph import route_after_critic
+    from app.service.deep_research_v2.graph import (
+        _route_after_critic_with_status,
+        route_after_critic,
+    )
     state = create_initial_state(query="test", session_id="s")
     state["verdict"] = "needs_revision"
     state["quality_score"] = 6.85
@@ -150,5 +160,90 @@ def test_route_after_critic_minor_near_threshold_passes_with_warnings():
         "severity": "minor",
         "resolved": False,
     }]
+    route, status = _route_after_critic_with_status(state)
+    assert route == "END"
+    assert status == "passed_with_minor_warnings"
     assert route_after_critic(state) == "END"
-    assert state["critic_loop_status"] == "passed_with_minor_warnings"
+    assert state["critic_loop_status"] == ""
+
+
+def test_route_after_critic_baseline_plus_one_ineffective_still_replans():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
+    state["quality_score"] = 4.5
+    state["replan_count"] = 1
+    state["review_history"] = [
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": None,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+    ]
+
+    assert _route_after_critic_with_status(state) == ("replanner", "needs_revision")
+
+
+def test_route_after_critic_final_report_changed_still_replans():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
+    state["quality_score"] = 4.5
+    state["replan_count"] = 2
+    state["review_history"] = [
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+                "final_report_changed": True,
+            },
+        },
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+    ]
+
+    assert _route_after_critic_with_status(state) == ("replanner", "needs_revision")
+
+
+@pytest.mark.asyncio
+async def test_critic_node_returns_persisted_loop_status(graph):
+    state = create_initial_state(query="test", session_id="s")
+    graph.critic.process = AsyncMock(return_value={
+        "verdict": "needs_revision",
+        "quality_score": 6.85,
+        "replan_count": 1,
+        "critic_feedback": [{
+            "id": "minor_1",
+            "severity": "minor",
+            "resolved": False,
+        }],
+        "unresolved_issues": 0,
+        "suggested_actions": [],
+    })
+
+    result = await graph._critic_node(state)
+
+    assert result["critic_loop_status"] == "passed_with_minor_warnings"
