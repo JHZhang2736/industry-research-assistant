@@ -120,6 +120,7 @@ class LeadWriter(BaseAgent):
 3. 如果某个问题没有足够证据解决，删除或弱化 unsupported claim，并在 unable_to_address 中说明原因。
 4. 关键事实必须带引用标记 [N]。
 5. 不要为了看起来解决问题而编造来源。
+6. citations 只能使用可用事实中列出的 URL，不要编造或补全未提供的 URL。
 
 输出JSON：
 ```json
@@ -599,6 +600,26 @@ class LeadWriter(BaseAgent):
             )
         return "\n".join(lines) if lines else "无具体问题"
 
+    def _revision_failure_result(
+        self,
+        section_id: str,
+        previous_content: str,
+        context: Dict[str, Any],
+        reason: str,
+    ) -> Dict[str, Any]:
+        unable_to_address = [
+            {"issue_id": issue.get("id"), "reason": reason}
+            for issue in context.get("issues", []) or []
+        ]
+        return {
+            "section_id": section_id,
+            "content": previous_content,
+            "revision_failed": True,
+            "changes_made": [],
+            "addressed_issue_ids": [],
+            "unable_to_address": unable_to_address,
+        }
+
     async def _revise_section(
         self,
         state: ResearchState,
@@ -613,7 +634,8 @@ class LeadWriter(BaseAgent):
         ] or list(state.get("facts", [])[:10])
         facts_text = [
             f"- [{fact.get('id')}] {fact.get('content')} "
-            f"(来源: {fact.get('source_name')}, 可信度: {fact.get('credibility_score')})"
+            f"(来源: {fact.get('source_name')}, URL: {fact.get('source_url') or fact.get('url') or 'N/A'}, "
+            f"可信度: {fact.get('credibility_score')})"
             for fact in related_facts
         ]
         data_text = [
@@ -641,8 +663,22 @@ class LeadWriter(BaseAgent):
         )
         result = self.parse_json_response(response)
         content = result.get("content", "") if result else ""
-        if content:
-            state["draft_sections"][section_id] = content
+        if not result:
+            return self._revision_failure_result(
+                section_id,
+                previous_content,
+                context,
+                "LLM response could not be parsed as JSON.",
+            )
+        if not content.strip():
+            return self._revision_failure_result(
+                section_id,
+                previous_content,
+                context,
+                "LLM response did not include usable revised content.",
+            )
+        state["draft_sections"][section_id] = content
+        section["status"] = "drafted"
         for citation in (result.get("citations", []) if result else []):
             state["references"].append({
                 "id": len(state["references"]) + 1,
