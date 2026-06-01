@@ -18,13 +18,17 @@ def graph(monkeypatch):
 
 
 def test_graph_compiled_has_4_main_nodes(graph):
-    """compile 后的 graph 应包含 planner / executor / critic / replanner 4 个主 node"""
-    compiled = graph.graph
-    node_names = set(compiled.get_graph().nodes.keys())
-    assert "planner" in node_names
-    assert "executor" in node_names
-    assert "critic" in node_names
-    assert "replanner" in node_names
+    """outer graph wraps the 4-node deep research workflow as a subgraph."""
+    outer_names = set(graph.graph.get_graph().nodes.keys())
+    assert "intent_router" in outer_names
+    assert "deep_research" in outer_names
+
+    subgraph = graph._build_deep_research_subgraph()
+    inner_names = set(subgraph.get_graph().nodes.keys())
+    assert "planner" in inner_names
+    assert "executor" in inner_names
+    assert "critic" in inner_names
+    assert "replanner" in inner_names
 
 
 def test_route_after_critic_pass_returns_end():
@@ -103,3 +107,48 @@ async def test_replanner_node_does_not_derive_actions_for_resolved_feedback(grap
 
     assert result["plan"] == []
     assert "sec_1" not in result["revision_context_by_section"]
+
+
+def test_route_after_critic_no_effective_revision_returns_end():
+    from app.service.deep_research_v2.graph import route_after_critic
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
+    state["quality_score"] = 4.5
+    state["replan_count"] = 2
+    state["review_history"] = [
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+        {
+            "quality_score": 4.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+    ]
+    assert route_after_critic(state) == "END"
+    assert state["critic_loop_status"] == "no_effective_revision"
+
+
+def test_route_after_critic_minor_near_threshold_passes_with_warnings():
+    from app.service.deep_research_v2.graph import route_after_critic
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "needs_revision"
+    state["quality_score"] = 6.85
+    state["replan_count"] = 1
+    state["critic_feedback"] = [{
+        "id": "minor_1",
+        "severity": "minor",
+        "resolved": False,
+    }]
+    assert route_after_critic(state) == "END"
+    assert state["critic_loop_status"] == "passed_with_minor_warnings"

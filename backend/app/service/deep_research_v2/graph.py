@@ -143,7 +143,42 @@ def _update_root_run_tags(root_run_id, base_tags, intent=None, research_type=Non
 # ============================================================================
 
 MAX_REPLAN = 3
-QUALITY_PASS_THRESHOLD = 7.0  # critic 给分 < 该值即视为"未通过"，需 replan
+
+
+def _quality_pass_threshold() -> float:
+    try:
+        return float(get_config().research.quality_threshold)
+    except Exception:
+        return 7.0
+
+
+def _only_minor_unresolved(state: ResearchState) -> bool:
+    feedback = state.get("critic_feedback", []) or []
+    unresolved = [
+        item for item in feedback
+        if isinstance(item, dict) and not item.get("resolved")
+    ]
+    return bool(unresolved) and all(
+        item.get("severity") == "minor" for item in unresolved
+    )
+
+
+def _has_no_effective_revision(state: ResearchState) -> bool:
+    history = state.get("review_history", []) or []
+    if len(history) < 2:
+        return False
+    recent = history[-2:]
+    for entry in recent:
+        delta = entry.get("delta_from_previous", {}) or {}
+        if abs(float(delta.get("score_delta") or 0.0)) >= 0.3:
+            return False
+        if delta.get("changed_sections"):
+            return False
+        if int(delta.get("new_facts_count") or 0) > 0:
+            return False
+        if int(delta.get("new_references_count") or 0) > 0:
+            return False
+    return True
 
 
 def route_after_intent(state: ResearchState) -> str:
@@ -178,18 +213,31 @@ def route_after_critic(state: ResearchState) -> str:
     """
     replan_count = state.get("replan_count", 0)
     if replan_count >= MAX_REPLAN:
+        state["critic_loop_status"] = "max_replan_reached"
         return "END"
 
     verdict = (state.get("verdict") or "").lower()
     if verdict == "pass":
+        state["critic_loop_status"] = "passed"
         return "END"
 
     suggested = state.get("suggested_actions", []) or []
     unresolved = state.get("unresolved_issues", 0) or 0
     score = float(state.get("quality_score", 0.0) or 0.0)
+    threshold = _quality_pass_threshold()
 
-    if suggested or unresolved > 0 or score < QUALITY_PASS_THRESHOLD or verdict in ("needs_revision", "needs_re_research"):
+    if _has_no_effective_revision(state):
+        state["critic_loop_status"] = "no_effective_revision"
+        return "END"
+
+    if _only_minor_unresolved(state) and score >= threshold - 0.2:
+        state["critic_loop_status"] = "passed_with_minor_warnings"
+        return "END"
+
+    if suggested or unresolved > 0 or score < threshold or verdict in ("needs_revision", "needs_re_research"):
+        state["critic_loop_status"] = "needs_revision"
         return "replanner"
+    state["critic_loop_status"] = "passed"
     return "END"
 
 
@@ -935,6 +983,8 @@ class DeepResearchGraph:
             "facts_count": len(facts),
             "charts_count": len(state.get("charts", [])),
             "iterations": state.get("replan_count", 0),
+            "critic_loop_status": state.get("critic_loop_status", ""),
+            "unresolved_issues": state.get("unresolved_issues", 0),
             "references": ui_refs,
         }
 
