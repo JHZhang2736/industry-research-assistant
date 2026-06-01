@@ -151,11 +151,11 @@ class CriticMaster(BaseAgent):
 
     DIMENSION_WEIGHTS = {
         "factual_support": 0.30,
-        "citation_integrity": 0.15,
+        "citation_integrity": 0.20,
         "coverage": 0.15,
         "reasoning": 0.15,
         "freshness": 0.10,
-        "actionability": 0.15,
+        "actionability": 0.10,
     }
 
     def _hash_text(self, text: str) -> str:
