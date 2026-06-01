@@ -10,6 +10,7 @@ DeepResearch V2.0 - 毒舌评论家 Agent (CriticMaster)
 4. 偏见识别 - 发现观点偏颇
 """
 
+import hashlib
 import uuid
 from typing import Dict, Any, List
 from datetime import datetime
@@ -148,6 +149,147 @@ class CriticMaster(BaseAgent):
             model=model
         )
 
+    DIMENSION_WEIGHTS = {
+        "factual_support": 0.30,
+        "citation_integrity": 0.15,
+        "coverage": 0.15,
+        "reasoning": 0.15,
+        "freshness": 0.10,
+        "actionability": 0.15,
+    }
+
+    def _hash_text(self, text: str) -> str:
+        digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
+
+    def _build_input_snapshot(self, state: ResearchState) -> Dict[str, Any]:
+        draft_sections = state.get("draft_sections", {}) or {}
+        return {
+            "final_report_hash": self._hash_text(state.get("final_report", "")),
+            "draft_hash_by_section": {
+                section_id: self._hash_text(content)
+                for section_id, content in draft_sections.items()
+            },
+            "facts_count": len(state.get("facts", []) or []),
+            "data_points_count": len(state.get("data_points", []) or []),
+            "references_count": len(state.get("references", []) or []),
+        }
+
+    def _build_delta_from_previous(
+        self,
+        state: ResearchState,
+        current_snapshot: Dict[str, Any],
+        quality_score: float,
+    ) -> Dict[str, Any]:
+        history = state.get("review_history", []) or []
+        if not history:
+            return {
+                "final_report_changed": None,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+                "score_delta": None,
+            }
+        previous = history[-1]
+        previous_snapshot = previous.get("input_snapshot", {}) or {}
+        previous_hashes = previous_snapshot.get("draft_hash_by_section", {}) or {}
+        current_hashes = current_snapshot.get("draft_hash_by_section", {}) or {}
+        changed_sections = sorted(
+            section_id
+            for section_id, current_hash in current_hashes.items()
+            if previous_hashes.get(section_id) != current_hash
+        )
+        return {
+            "final_report_changed": (
+                previous_snapshot.get("final_report_hash")
+                != current_snapshot.get("final_report_hash")
+            ),
+            "changed_sections": changed_sections,
+            "new_facts_count": max(
+                0,
+                int(current_snapshot.get("facts_count", 0))
+                - int(previous_snapshot.get("facts_count", 0)),
+            ),
+            "new_references_count": max(
+                0,
+                int(current_snapshot.get("references_count", 0))
+                - int(previous_snapshot.get("references_count", 0)),
+            ),
+            "score_delta": round(
+                quality_score - float(previous.get("quality_score", 0.0) or 0.0),
+                3,
+            ),
+        }
+
+    def _coerce_dimension_scores(self, value: Any) -> Dict[str, float]:
+        if not isinstance(value, dict):
+            return {}
+        scores: Dict[str, float] = {}
+        for key in self.DIMENSION_WEIGHTS:
+            try:
+                scores[key] = max(0.0, min(10.0, float(value.get(key, 0.0))))
+            except (TypeError, ValueError):
+                scores[key] = 0.0
+        return scores
+
+    def _quality_from_dimensions(
+        self,
+        dimension_scores: Dict[str, float],
+        fallback: Any,
+    ) -> float:
+        if dimension_scores:
+            total = sum(
+                dimension_scores[key] * weight
+                for key, weight in self.DIMENSION_WEIGHTS.items()
+            )
+            return round(total, 2)
+        try:
+            return float(fallback)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _normalize_feedback(
+        self,
+        state: ResearchState,
+        parsed: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        resolved_ids = set(parsed.get("resolved_issue_ids", []) or [])
+        previous_by_id = {
+            item.get("id"): dict(item)
+            for item in state.get("critic_feedback", []) or []
+            if isinstance(item, dict) and item.get("id")
+        }
+
+        merged: List[Dict[str, Any]] = []
+        for issue_id, previous in previous_by_id.items():
+            if issue_id in resolved_ids:
+                previous["resolved"] = True
+                merged.append(previous)
+
+        for fb in parsed.get("critic_feedback", []) or []:
+            if not isinstance(fb, dict):
+                continue
+            same_as = fb.get("same_as_issue_id")
+            if same_as and same_as in previous_by_id:
+                fb["id"] = same_as
+            if "id" not in fb or not fb.get("id"):
+                fb["id"] = f"issue_{uuid.uuid4().hex[:8]}"
+            fb.setdefault("resolved", False)
+            if fb["id"] in resolved_ids:
+                fb["resolved"] = True
+            merged.append(fb)
+
+        seen = set()
+        unique: List[Dict[str, Any]] = []
+        for fb in merged:
+            issue_id = fb.get("id")
+            key = issue_id or uuid.uuid4().hex
+            if key in seen:
+                unique = [item for item in unique if item.get("id") != key]
+            seen.add(key)
+            unique.append(fb)
+        return unique
+
     async def process(self, state: ResearchState) -> Dict[str, Any]:
         """v3 节点形态：返回扁平 dict，不直接修改 state
 
@@ -169,27 +311,48 @@ class CriticMaster(BaseAgent):
 
         parsed = await self._review_content(state) or {}
 
-        result = {
-            "quality_score": parsed.get("quality_score", 0.0),
+        dimension_scores = self._coerce_dimension_scores(parsed.get("dimension_scores"))
+        quality_score = self._quality_from_dimensions(
+            dimension_scores,
+            parsed.get("quality_score", 0.0),
+        )
+        feedback = self._normalize_feedback(state, parsed)
+        unresolved_count = parsed.get(
+            "unresolved_issues",
+            len([
+                i for i in feedback
+                if not i.get("resolved")
+                and i.get("severity") in ("critical", "major")
+            ]),
+        )
+        review_id = parsed.get("review_id") or f"review_{uuid.uuid4().hex[:8]}"
+        snapshot = self._build_input_snapshot(state)
+        delta = self._build_delta_from_previous(state, snapshot, quality_score)
+        history_entry = {
+            "review_id": review_id,
+            "round": len(state.get("review_history", []) or []),
+            "quality_score": quality_score,
             "verdict": parsed.get("verdict", "needs_revision"),
-            "critic_feedback": parsed.get("critic_feedback", []),
-            "unresolved_issues": parsed.get(
-                "unresolved_issues",
-                len([
-                    i for i in parsed.get("critic_feedback", [])
-                    if i.get("severity") in ("critical", "major")
-                ]),
-            ),
+            "dimension_scores": dimension_scores,
+            "issue_ids": [fb.get("id") for fb in feedback if not fb.get("resolved")],
             "suggested_actions": parsed.get("suggested_actions", []),
-            "missing_aspects": parsed.get("missing_aspects", []),
+            "input_snapshot": snapshot,
+            "delta_from_previous": delta,
             "summary": parsed.get("summary", ""),
         }
 
-        # 给每条 feedback 补 id（若 LLM 没生成）
-        for fb in result["critic_feedback"]:
-            if "id" not in fb:
-                fb["id"] = f"issue_{uuid.uuid4().hex[:8]}"
-            fb.setdefault("resolved", False)
+        result = {
+            "review_id": review_id,
+            "quality_score": quality_score,
+            "dimension_scores": dimension_scores,
+            "verdict": parsed.get("verdict", "needs_revision"),
+            "critic_feedback": feedback,
+            "unresolved_issues": unresolved_count,
+            "suggested_actions": parsed.get("suggested_actions", []),
+            "missing_aspects": parsed.get("missing_aspects", []),
+            "summary": parsed.get("summary", ""),
+            "review_history": list(state.get("review_history", []) or []) + [history_entry],
+        }
 
         self.add_message(state, "review", {
             "agent": self.name,
