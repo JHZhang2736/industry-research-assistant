@@ -188,3 +188,46 @@ def test_noop_traceable_decorator_consumes_langsmith_extra():
 
     # langsmith_extra 必须被吞掉，不会作为未知 kwarg 传进 add() 报 TypeError
     assert add(2, 3, langsmith_extra={"name": "x"}) == 5
+
+
+@pytest.mark.asyncio
+async def test_executor_records_writer_revision_diagnostics(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "修订内容",
+            "addressed_issue_ids": ["issue_1"],
+            "unable_to_address": [{"issue_id": "issue_2", "reason": "无来源"}],
+            "changes_made": ["补充引用"],
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "旧内容"}
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["draft_sections"]["sec_1"] == "修订内容"
+    diagnostic = result["critic_diagnostics"][0]
+    assert diagnostic["type"] == "writer_revision"
+    assert diagnostic["section_id"] == "sec_1"
+    assert diagnostic["addressed_issue_ids"] == ["issue_1"]
+    assert diagnostic["before_hash"].startswith("sha256:")
+    assert diagnostic["after_hash"].startswith("sha256:")
+    assert diagnostic["before_hash"] != diagnostic["after_hash"]
