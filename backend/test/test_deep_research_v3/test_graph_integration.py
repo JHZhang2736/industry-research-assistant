@@ -89,6 +89,39 @@ def test_route_after_critic_clean_pass_sets_passed_status():
     assert _route_after_critic_with_status(state) == ("END", "passed")
 
 
+def test_route_after_critic_clean_pass_with_flat_deltas_stays_passed():
+    from app.service.deep_research_v2.graph import _route_after_critic_with_status
+
+    state = create_initial_state(query="test", session_id="s")
+    state["verdict"] = "pass"
+    state["quality_score"] = 8.5
+    state["unresolved_issues"] = 0
+    state["suggested_actions"] = []
+    state["critic_feedback"] = []
+    state["review_history"] = [
+        {
+            "quality_score": 8.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+        {
+            "quality_score": 8.5,
+            "delta_from_previous": {
+                "score_delta": 0.0,
+                "changed_sections": [],
+                "new_facts_count": 0,
+                "new_references_count": 0,
+            },
+        },
+    ]
+
+    assert _route_after_critic_with_status(state) == ("END", "passed")
+
+
 def test_route_after_critic_low_score_no_actions_still_replans():
     """新规则：critic 给低分但忘填 suggested_actions 也应触发 replanner"""
     from app.service.deep_research_v2.graph import route_after_critic

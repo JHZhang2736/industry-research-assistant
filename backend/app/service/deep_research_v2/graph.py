@@ -231,6 +231,9 @@ def _route_after_critic_with_status(state: ResearchState) -> tuple[str, str]:
     threshold = _quality_pass_threshold()
     has_blocking_unresolved = _has_blocking_unresolved(state)
 
+    if not suggested and not has_blocking_unresolved and score >= threshold:
+        return "END", "passed"
+
     if _has_no_effective_revision(state):
         return "END", "no_effective_revision"
 
