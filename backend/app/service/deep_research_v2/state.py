@@ -193,7 +193,11 @@ class ResearchState(TypedDict):
     critic_feedback: List[Dict[str, Any]]   # 评论家反馈
     unresolved_issues: int                  # 未解决问题数
     quality_score: float                    # 质量评分
+    critic_loop_status: str                 # critic loop route decision persisted from critic node
     pending_search_queries: List[str]       # 待执行的补充搜索查询（审核后需要补充的）
+    review_history: List[Dict[str, Any]]    # 每轮 Critic 的评分、快照与差异
+    revision_context_by_section: Dict[str, Dict[str, Any]]  # section_id -> 定向修订上下文
+    critic_diagnostics: List[Dict[str, Any]] # Critic/Replanner/Writer/Executor 诊断事件
 
     # === Plan-and-Execute 新增字段（v3 架构）===
     plan: List[Dict[str, Any]]              # PlanStep 序列化列表（planner 输出，executor 消费）
@@ -251,7 +255,11 @@ def create_initial_state(
         critic_feedback=[],
         unresolved_issues=0,
         quality_score=0.0,
+        critic_loop_status="",
         pending_search_queries=[],
+        review_history=[],
+        revision_context_by_section={},
+        critic_diagnostics=[],
         plan=[],
         completed_steps=[],
         replan_count=0,

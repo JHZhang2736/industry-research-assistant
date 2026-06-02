@@ -99,7 +99,7 @@ class ResearchConfig:
     enable_code_execution: bool = True
 
     # 质量评分阈值（1-10分制，低于此分数需要修订）
-    quality_threshold: float = 6.0
+    quality_threshold: float = 7.0
 
 
 @dataclass

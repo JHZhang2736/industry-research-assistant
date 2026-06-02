@@ -143,7 +143,64 @@ def _update_root_run_tags(root_run_id, base_tags, intent=None, research_type=Non
 # ============================================================================
 
 MAX_REPLAN = 3
-QUALITY_PASS_THRESHOLD = 7.0  # critic 给分 < 该值即视为"未通过"，需 replan
+
+
+def _quality_pass_threshold() -> float:
+    try:
+        return float(get_config().research.quality_threshold)
+    except Exception:
+        return 7.0
+
+
+def _only_minor_unresolved(state: ResearchState) -> bool:
+    feedback = state.get("critic_feedback", []) or []
+    unresolved = [
+        item for item in feedback
+        if isinstance(item, dict) and not item.get("resolved")
+    ]
+    return bool(unresolved) and all(
+        item.get("severity") == "minor" for item in unresolved
+    )
+
+
+def _has_blocking_unresolved(state: ResearchState) -> bool:
+    unresolved_count = int(state.get("unresolved_issues", 0) or 0)
+    if unresolved_count > 0:
+        return True
+
+    feedback = state.get("critic_feedback", []) or []
+    return any(
+        isinstance(item, dict)
+        and not item.get("resolved")
+        and item.get("severity") in ("critical", "major")
+        for item in feedback
+    )
+
+
+def _has_no_effective_revision(state: ResearchState) -> bool:
+    history = state.get("review_history", []) or []
+    meaningful_deltas = []
+    for entry in history:
+        delta = entry.get("delta_from_previous", {}) or {}
+        score_delta = delta.get("score_delta")
+        if score_delta is None:
+            continue
+        meaningful_deltas.append(delta)
+    if len(meaningful_deltas) < 2:
+        return False
+    for delta in meaningful_deltas[-2:]:
+        score_delta = delta.get("score_delta")
+        if delta.get("final_report_changed") is True:
+            return False
+        if abs(float(score_delta or 0.0)) >= 0.3:
+            return False
+        if delta.get("changed_sections"):
+            return False
+        if int(delta.get("new_facts_count") or 0) > 0:
+            return False
+        if int(delta.get("new_references_count") or 0) > 0:
+            return False
+    return True
 
 
 def route_after_intent(state: ResearchState) -> str:
@@ -162,6 +219,37 @@ def route_after_intent(state: ResearchState) -> str:
     return "deep_research"
 
 
+def _route_after_critic_with_status(state: ResearchState) -> tuple[str, str]:
+    """Return the next route and persistable critic loop status."""
+    replan_count = state.get("replan_count", 0)
+    if replan_count >= MAX_REPLAN:
+        return "END", "max_replan_reached"
+
+    verdict = (state.get("verdict") or "").lower()
+    suggested = state.get("suggested_actions", []) or []
+    score = float(state.get("quality_score", 0.0) or 0.0)
+    threshold = _quality_pass_threshold()
+    has_blocking_unresolved = _has_blocking_unresolved(state)
+
+    if not suggested and not has_blocking_unresolved and score >= threshold:
+        return "END", "passed"
+
+    if _has_no_effective_revision(state):
+        return "END", "no_effective_revision"
+
+    if _only_minor_unresolved(state) and score >= threshold - 0.2:
+        return "END", "passed_with_minor_warnings"
+
+    if (
+        suggested
+        or has_blocking_unresolved
+        or score < threshold
+        or verdict in ("needs_revision", "needs_re_research")
+    ):
+        return "replanner", "needs_revision"
+    return "END", "passed"
+
+
 def route_after_critic(state: ResearchState) -> str:
     """critic node 之后的路由
 
@@ -169,28 +257,15 @@ def route_after_critic(state: ResearchState) -> str:
     actions，那种情况也应该 replan。新规则：
 
     - 已达 MAX_REPLAN → END（兜底，防死循环）
-    - verdict == "pass" → END（即使有 actions 也信任 critic 的 pass 判断）
+    - verdict == "pass" 只有在分数达标且没有阻塞性未解决问题时才 END
     - 满足任一即视为"需要 replan"：
         * suggested_actions 非空
         * unresolved_issues > 0
         * quality_score < 阈值
         * verdict 不是 "pass"
     """
-    replan_count = state.get("replan_count", 0)
-    if replan_count >= MAX_REPLAN:
-        return "END"
-
-    verdict = (state.get("verdict") or "").lower()
-    if verdict == "pass":
-        return "END"
-
-    suggested = state.get("suggested_actions", []) or []
-    unresolved = state.get("unresolved_issues", 0) or 0
-    score = float(state.get("quality_score", 0.0) or 0.0)
-
-    if suggested or unresolved > 0 or score < QUALITY_PASS_THRESHOLD or verdict in ("needs_revision", "needs_re_research"):
-        return "replanner"
-    return "END"
+    route, _status = _route_after_critic_with_status(state)
+    return route
 
 
 def route_after_replanner(state: ResearchState) -> str:
@@ -545,12 +620,15 @@ class DeepResearchGraph:
             "status": "running",
         })
         result = await self.critic.process(state)
+        if not isinstance(result, dict):
+            result = {}
+        route_state = dict(state)
+        route_state.update(result)
+        _route, status = _route_after_critic_with_status(route_state)
+        result["critic_loop_status"] = status
         # 完成态：把 quality_score / unresolved 写入 stats（前端忽略未知字段）
-        if isinstance(result, dict):
-            quality = result.get("quality_score", 0.0)
-            unresolved = result.get("unresolved_issues", 0)
-        else:
-            quality, unresolved = 0.0, 0
+        quality = result.get("quality_score", 0.0)
+        unresolved = result.get("unresolved_issues", 0)
         self._emit_event("research_step", {
             "step_type": "reviewing",
             "title": "🔎 审核报告",
@@ -563,40 +641,17 @@ class DeepResearchGraph:
         return result
 
     async def _replanner_node(self, state: ResearchState) -> Dict[str, Any]:
-        """replanner node 包装：把 suggested_actions 翻译成补救 plan
+        """Run Replanner with critic-suggested actions.
 
-        兜底逻辑：critic LLM 给低分但忘填 actions 时，从 critic_feedback 推导，
-        或退而对所有 section 做 retry_search，避免"判定需 replan 却无事可做"。
+        Replanner.process owns fallback action derivation and filters stale or
+        resolved feedback before producing repair steps.
         """
         self._maybe_cancel(state)
         self._emit_phase_start("replanning", "开始重规划...")
         logger.info("Executing Replanner node...")
 
         suggested = list(state.get("suggested_actions", []) or [])
-
-        if not suggested:
-            feedback = state.get("critic_feedback", []) or []
-            derived: List[str] = []
-            for fb in feedback:
-                target = fb.get("target_section", "") if isinstance(fb, dict) else ""
-                issue = fb.get("issue_type", "") if isinstance(fb, dict) else ""
-                if not target or target in ("全局", "global", ""):
-                    continue
-                if issue in ("missing_source", "outdated", "incomplete"):
-                    derived.append(f"retry_search:{target}")
-                elif issue in ("logic_error", "bias", "hallucination"):
-                    derived.append(f"rewrite:{target}")
-                else:
-                    derived.append(f"retry_search:{target}")
-            if derived:
-                suggested = list(dict.fromkeys(derived))  # 去重保序
-            else:
-                outline = state.get("outline", []) or []
-                suggested = [
-                    f"retry_search:{s.get('id')}"
-                    for s in outline if s.get("id")
-                ]
-            logger.info(f"Replanner fallback actions ({len(suggested)}): {suggested}")
+        logger.info(f"Replanner received suggested actions ({len(suggested)}): {suggested}")
 
         result = await self.replanner.process(state, suggested_actions=suggested)
         return result
@@ -958,6 +1013,8 @@ class DeepResearchGraph:
             "facts_count": len(facts),
             "charts_count": len(state.get("charts", [])),
             "iterations": state.get("replan_count", 0),
+            "critic_loop_status": state.get("critic_loop_status", ""),
+            "unresolved_issues": state.get("unresolved_issues", 0),
             "references": ui_refs,
         }
 

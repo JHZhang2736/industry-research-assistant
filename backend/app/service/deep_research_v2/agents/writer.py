@@ -92,6 +92,53 @@ class LeadWriter(BaseAgent):
 
 开始撰写："""
 
+    REVISION_SECTION_PROMPT = """你是一位负责定向修订研究报告章节的资深编辑。
+
+## 研究主题
+{query}
+
+## 当前章节
+标题: {section_title}
+描述: {section_description}
+类型: {section_type}
+
+## 旧章节内容
+{previous_content}
+
+## 必须解决的 Critic 问题
+{issues}
+
+## 可用事实
+{facts}
+
+## 数据点
+{data_points}
+
+## 写作要求
+1. 只重写当前章节，不输出章节标题。
+2. 必须优先满足每个问题的 acceptance_criteria。
+3. 如果某个问题没有足够证据解决，删除或弱化 unsupported claim，并在 unable_to_address 中说明原因。
+4. 关键事实必须带引用标记 [N]。
+5. 不要为了看起来解决问题而编造来源。
+6. citations 只能使用可用事实中列出的 URL，不要编造或补全未提供的 URL。
+
+输出JSON：
+```json
+{{
+    "content": "修订后的章节正文（Markdown，不包含章节标题）",
+    "changes_made": ["具体修改"],
+    "addressed_issue_ids": ["issue_xxx"],
+    "unable_to_address": [
+        {{"issue_id": "issue_xxx", "reason": "无法解决原因"}}
+    ],
+    "citations": [
+        {{"source": "来源名称", "url": "完整URL"}}
+    ]
+}}
+```
+
+开始修订："""
+
     SYNTHESIS_PROMPT = """你是首席笔杆，需要将各章节整合成完整的研究报告。
 
 ## 研究主题
@@ -539,6 +586,114 @@ class LeadWriter(BaseAgent):
 
         return state
 
+    def _format_revision_issues(self, context: Dict[str, Any]) -> str:
+        lines = []
+        for issue in context.get("issues", []) or []:
+            criteria = issue.get("acceptance_criteria", []) or []
+            criteria_text = "; ".join(str(item) for item in criteria) if criteria else "无"
+            lines.append(
+                f"- ID: {issue.get('id')}\n"
+                f"  严重程度: {issue.get('severity')}\n"
+                f"  问题: {issue.get('description')}\n"
+                f"  建议: {issue.get('suggestion')}\n"
+                f"  验收标准: {criteria_text}"
+            )
+        return "\n".join(lines) if lines else "无具体问题"
+
+    def _revision_failure_result(
+        self,
+        section_id: str,
+        previous_content: str,
+        context: Dict[str, Any],
+        reason: str,
+    ) -> Dict[str, Any]:
+        unable_to_address = [
+            {"issue_id": issue.get("id"), "reason": reason}
+            for issue in context.get("issues", []) or []
+        ]
+        return {
+            "section_id": section_id,
+            "content": previous_content,
+            "revision_failed": True,
+            "changes_made": [],
+            "addressed_issue_ids": [],
+            "unable_to_address": unable_to_address,
+        }
+
+    async def _revise_section(
+        self,
+        state: ResearchState,
+        section: Dict[str, Any],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        section_id = section["id"]
+        previous_content = state.get("draft_sections", {}).get(section_id, "")
+        related_facts = [
+            f for f in state.get("facts", [])
+            if section_id in f.get("related_sections", [])
+        ] or list(state.get("facts", [])[:10])
+        facts_text = [
+            f"- [{fact.get('id')}] {fact.get('content')} "
+            f"(来源: {fact.get('source_name')}, URL: {fact.get('source_url') or fact.get('url') or 'N/A'}, "
+            f"可信度: {fact.get('credibility_score')})"
+            for fact in related_facts
+        ]
+        data_text = [
+            f"- {dp.get('name')}: {dp.get('value')} {dp.get('unit', '')} ({dp.get('year', 'N/A')})"
+            for dp in state.get("data_points", [])[:10]
+        ]
+        prompt = self.REVISION_SECTION_PROMPT.format(
+            query=state["query"],
+            section_title=section.get("title", ""),
+            section_description=section.get("description", ""),
+            section_type=section.get("section_type", "mixed"),
+            previous_content=previous_content or "（暂无旧内容）",
+            issues=self._format_revision_issues(context),
+            facts="\n".join(facts_text) if facts_text else "（暂无相关事实）",
+            data_points="\n".join(data_text) if data_text else "（暂无数据点）",
+        )
+        response = await self.call_llm(
+            system_prompt="你是负责修订报告章节的资深编辑。",
+            user_prompt=prompt,
+            json_mode=True,
+            temperature=0.3,
+            max_tokens=16000,
+            state=state,
+            action="revise_section",
+        )
+        result = self.parse_json_response(response)
+        content = result.get("content", "") if result else ""
+        if not result:
+            return self._revision_failure_result(
+                section_id,
+                previous_content,
+                context,
+                "LLM response could not be parsed as JSON.",
+            )
+        if not content.strip():
+            return self._revision_failure_result(
+                section_id,
+                previous_content,
+                context,
+                "LLM response did not include usable revised content.",
+            )
+        state["draft_sections"][section_id] = content
+        section["status"] = "drafted"
+        for citation in (result.get("citations", []) if result else []):
+            state["references"].append({
+                "id": len(state["references"]) + 1,
+                "marker": citation.get("marker"),
+                "source": citation.get("source"),
+                "url": citation.get("url", ""),
+            })
+        return {
+            "section_id": section_id,
+            "content": content or previous_content,
+            "changes_made": result.get("changes_made", []) if result else [],
+            "addressed_issue_ids": result.get("addressed_issue_ids", []) if result else [],
+            "unable_to_address": result.get("unable_to_address", []) if result else [],
+        }
+
     async def write_one_section(
         self,
         section_id: str,
@@ -553,6 +708,12 @@ class LeadWriter(BaseAgent):
         section = next((s for s in outline if s.get("id") == section_id), None)
         if section is None:
             return {"section_id": section_id, "content": "", "error": "section not in outline"}
+
+        revision_context = (
+            state.get("revision_context_by_section", {}) or {}
+        ).get(section_id)
+        if revision_context:
+            return await self._revise_section(state, section, revision_context)
 
         await self._write_section(state, section)
         content = state.get("draft_sections", {}).get(section_id, "")

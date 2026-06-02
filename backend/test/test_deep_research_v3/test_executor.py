@@ -188,3 +188,202 @@ def test_noop_traceable_decorator_consumes_langsmith_extra():
 
     # langsmith_extra 必须被吞掉，不会作为未知 kwarg 传进 add() 报 TypeError
     assert add(2, 3, langsmith_extra={"name": "x"}) == 5
+
+
+@pytest.mark.asyncio
+async def test_executor_records_writer_revision_diagnostics(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.executor import _hash_text
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "修订内容",
+            "addressed_issue_ids": ["issue_1"],
+            "unable_to_address": [{"issue_id": "issue_2", "reason": "无来源"}],
+            "changes_made": ["补充引用"],
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "旧内容"}
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["draft_sections"]["sec_1"] == "修订内容"
+    diagnostic = result["critic_diagnostics"][0]
+    assert diagnostic["type"] == "writer_revision"
+    assert diagnostic["section_id"] == "sec_1"
+    assert diagnostic["addressed_issue_ids"] == ["issue_1"]
+    assert diagnostic["unable_to_address"] == [{"issue_id": "issue_2", "reason": "无来源"}]
+    assert diagnostic["changes_made"] == ["补充引用"]
+    assert diagnostic["before_hash"] == _hash_text("旧内容")
+    assert diagnostic["after_hash"] == _hash_text("修订内容")
+    assert diagnostic["before_hash"] != diagnostic["after_hash"]
+
+
+@pytest.mark.asyncio
+async def test_executor_records_revision_diagnostic_for_empty_issue_arrays(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "新内容",
+            "addressed_issue_ids": [],
+            "unable_to_address": [],
+            "changes_made": ["格式调整"],
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "旧内容"}
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["draft_sections"]["sec_1"] == "新内容"
+    assert len(result["critic_diagnostics"]) == 1
+    diagnostic = result["critic_diagnostics"][0]
+    assert diagnostic["type"] == "writer_revision"
+    assert diagnostic["section_id"] == "sec_1"
+    assert diagnostic["addressed_issue_ids"] == []
+    assert diagnostic["unable_to_address"] == []
+    assert diagnostic["changes_made"] == ["格式调整"]
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_draft_on_revision_failed(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "坏内容",
+            "revision_failed": True,
+            "unable_to_address": [{"issue_id": "issue_1", "reason": "缺少来源"}],
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "旧内容"}
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["draft_sections"]["sec_1"] == "旧内容"
+    diagnostic = result["critic_diagnostics"][0]
+    assert diagnostic["revision_failed"] is True
+    assert diagnostic["before_hash"] == diagnostic["after_hash"]
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_existing_critic_diagnostics(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "新内容",
+            "addressed_issue_ids": ["issue_1"],
+            "unable_to_address": [],
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    existing = {"type": "critic", "section_id": "sec_1", "issue_id": "issue_1"}
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["draft_sections"] = {"sec_1": "旧内容"}
+    state["critic_diagnostics"] = [existing]
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["critic_diagnostics"][0] == existing
+    assert len(result["critic_diagnostics"]) == 2
+    assert result["critic_diagnostics"][1]["type"] == "writer_revision"
+
+
+@pytest.mark.asyncio
+async def test_executor_does_not_record_diagnostic_for_normal_write(monkeypatch):
+    from app.service.deep_research_v2 import executor as executor_module
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_write_section(section_id, state):
+        return {
+            "section_id": section_id,
+            "content": "普通内容",
+        }
+
+    monkeypatch.setattr(
+        executor_module,
+        "TOOL_REGISTRY",
+        dict(executor_module.TOOL_REGISTRY, write_section=fake_write_section),
+    )
+
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "章节一"}]
+    state["plan"] = [{
+        "step_id": "write_1",
+        "tool": "write_section",
+        "args": {"section_id": "sec_1"},
+        "depends_on": [],
+        "parallel_group": None,
+    }]
+
+    result = await executor_module.executor_node(state)
+
+    assert result["draft_sections"]["sec_1"] == "普通内容"
+    assert result["critic_diagnostics"] == []

@@ -8,6 +8,7 @@ import time
 import asyncio
 import functools
 import logging
+import hashlib
 from typing import Dict, Any, List, Set
 
 from .state import ResearchState
@@ -173,6 +174,11 @@ def _stats_for(
             "word_count": word_count,
         }
     return {}
+
+
+def _hash_text(text: str) -> str:
+    digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 
 def _emit_step(
@@ -346,6 +352,7 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
     merged_code_executions = list(state.get("code_executions", []))
     merged_insights = list(state.get("insights", []))
     merged_draft_sections = dict(state.get("draft_sections", {}))
+    merged_critic_diagnostics = list(state.get("critic_diagnostics", []) or [])
 
     started_steps: Set[str] = set()
 
@@ -393,7 +400,30 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
                 sec_id = output.get("section_id")
                 content = output.get("content", "")
                 if sec_id:
+                    before_content = merged_draft_sections.get(sec_id, "")
+                    if output.get("revision_failed") is True:
+                        content = before_content
                     merged_draft_sections[sec_id] = content
+
+                    revision_keys = {
+                        "addressed_issue_ids",
+                        "unable_to_address",
+                        "changes_made",
+                        "revision_failed",
+                    }
+                    if any(key in output for key in revision_keys):
+                        diagnostic = {
+                            "type": "writer_revision",
+                            "section_id": sec_id,
+                            "addressed_issue_ids": output.get("addressed_issue_ids", []),
+                            "unable_to_address": output.get("unable_to_address", []),
+                            "changes_made": output.get("changes_made", []),
+                            "before_hash": _hash_text(before_content),
+                            "after_hash": _hash_text(content),
+                        }
+                        if "revision_failed" in output:
+                            diagnostic["revision_failed"] = output["revision_failed"]
+                        merged_critic_diagnostics.append(diagnostic)
 
         # 批次结束后，更新本批涉及 step_type 的累计 stats（仍 status=running，直到全 plan 完成）
         for st in batch_step_types:
@@ -449,5 +479,6 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
         "code_executions": merged_code_executions,
         "insights": merged_insights,
         "draft_sections": merged_draft_sections,
+        "critic_diagnostics": merged_critic_diagnostics,
         "final_report": final_report,
     }
