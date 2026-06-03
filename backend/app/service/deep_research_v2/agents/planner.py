@@ -74,6 +74,36 @@ def _format_outline_hint(outline_template: list) -> str:
     return "\n".join(lines)
 
 
+def _format_scoping_summary(scoping_summary: dict) -> str:
+    if not scoping_summary:
+        return ""
+    lines = [
+        "Initial scoping result (planning context only; not verified report evidence):"
+    ]
+    key_subdomains = scoping_summary.get("key_subdomains") or []
+    hot_terms = scoping_summary.get("hot_terms") or []
+    source_notes = scoping_summary.get("source_notes") or []
+    initial_sources = scoping_summary.get("initial_sources") or []
+    warning = scoping_summary.get("warning") or ""
+    if key_subdomains:
+        lines.append("Key subdomains: " + ", ".join(map(str, key_subdomains[:8])))
+    if hot_terms:
+        lines.append("Hot terms: " + ", ".join(map(str, hot_terms[:12])))
+    if source_notes:
+        lines.append("Source notes: " + "; ".join(map(str, source_notes[:6])))
+    if initial_sources:
+        lines.append("Initial sources:")
+        for source in initial_sources[:8]:
+            title = source.get("title", "")
+            site = source.get("site_name", "")
+            url = source.get("url", "")
+            lines.append(f"- {title} ({site}) {url}")
+    if warning:
+        lines.append(f"Scoping warning: {warning}")
+    lines.append("Generate the outline based on this scoping map and the user's query.")
+    return "\n".join(lines)
+
+
 PLANNER_PROMPT = """你是一位行业研究的总规划师。给定一个研究问题，你需要：
 
 1. 生成 6 章节的研究 outline（每个章节标注类型：qualitative/quantitative/mixed）
@@ -199,6 +229,9 @@ class Planner(BaseAgent):
             user_prompt = f"研究问题：{query}"
             if outline_hint:
                 user_prompt += f"\n\n{outline_hint}"
+            scoping_hint = _format_scoping_summary(state.get("scoping_summary", {}))
+            if scoping_hint:
+                user_prompt += f"\n\n{scoping_hint}"
 
             # 召回长期记忆（偏好 + 历史教训）：一次召回，写入 state 供 checkpoint/LangSmith，
             # 同时拼成前缀注入 prompt
@@ -267,6 +300,40 @@ class Planner(BaseAgent):
                 step["depends_on"] = list(analyze_ids) + list(charts_ids)
                 step["parallel_group"] = "write_batch"
         return plan
+
+    def refresh_plan_queries(
+        self,
+        query: str,
+        outline: list,
+        plan: list,
+    ) -> list:
+        sections_by_id = {
+            section.get("id"): section
+            for section in outline
+            if section.get("id")
+        }
+        refreshed = []
+        for step in plan:
+            new_step = dict(step)
+            new_step["args"] = dict(step.get("args", {}) or {})
+            if step.get("tool") == "search_section":
+                section_id = new_step["args"].get("section_id")
+                section = sections_by_id.get(section_id)
+                if section:
+                    title = str(section.get("title", "")).strip()
+                    description = str(section.get("description", "")).strip()
+                    queries = [str(query).strip()]
+                    if title:
+                        queries.append(title)
+                    if title and description:
+                        queries.append(f"{title} {description}"[:160])
+                    deduped = []
+                    for item in queries:
+                        if item and item not in deduped:
+                            deduped.append(item)
+                    new_step["args"]["queries"] = deduped
+            refreshed.append(new_step)
+        return self._enforce_plan_topology(refreshed)
 
     def _fallback_template(self, query: str) -> Dict[str, Any]:
         """LLM 失败时的兜底：返回固定 6 章节模板"""
