@@ -22,6 +22,15 @@ from ..state import ResearchState, ResearchPhase
 from ..concurrency import BOCHA_SEM
 from ..security import detect_injection, guard_results, wrap_untrusted, INJECTION_DEFENSE_PREAMBLE
 
+# Bocha 语义 rerank 配置
+RERANK_API_URL = "https://api.bochaai.com/v1/rerank"
+RERANK_MODEL = "gte-rerank"
+RERANK_THRESHOLD = 0.4      # relevance_score 低于此值的结果丢弃
+RERANK_TOP_N = 10           # rerank 后进入 LLM 抽取的结果数
+MAX_RERANK_DOCS = 50        # Bocha rerank 单次最多文档数
+RERANK_DOC_MAXLEN = 1500    # 单文档拼接最大字符（rerank 仅取前 512 token）
+CREDIBILITY_FLOOR = 0.3     # 最终可信度低于此值的 fact 硬丢弃
+
 # 网页文本提取库（可选依赖）
 try:
     import trafilatura
@@ -231,6 +240,7 @@ URL: {url}
         )
         self.search_api_key = search_api_key
         self.search_cache: Dict[str, List] = {}
+        self.rerank_cache: Dict[str, List] = {}
         self.fact_fingerprints: Dict[str, str] = {}  # 事实指纹用于去重
 
         # 初始化本地知识库搜索服务
@@ -1228,6 +1238,95 @@ URL: {url}
         except Exception as e:
             self.logger.error(f"Bocha search error for '{query}': {e}")
             return []
+
+    async def _rerank(
+        self,
+        query: str,
+        results: List[Dict],
+        top_n: int = RERANK_TOP_N,
+        threshold: float = RERANK_THRESHOLD,
+    ) -> List[Dict]:
+        """用 Bocha 语义 rerank 对搜索结果做相关性排序 + 阈值硬丢弃。
+
+        流程：URL 去重 → 截到 MAX_RERANK_DOCS → 调 rerank →
+        丢 relevance_score < threshold → 按分降序 → 取 top_n。
+        任何失败都降级为「不 rerank，去重后取 top_n（原始顺序）」，不阻塞主流程。
+        命中的结果会带上 relevance_score 字段。
+        """
+        if not results:
+            return []
+
+        # 去重（保序）
+        seen = set()
+        deduped = []
+        for r in results:
+            u = r.get("url", "")
+            if u and u in seen:
+                continue
+            if u:
+                seen.add(u)
+            deduped.append(r)
+
+        if len(deduped) <= 1:
+            return deduped[:top_n]
+
+        candidates = deduped[:MAX_RERANK_DOCS]
+
+        # 缓存键：query + 候选 URL 集
+        cache_key = hashlib.md5(
+            (query + "|" + "|".join(r.get("url", "") for r in candidates)).encode()
+        ).hexdigest()
+        if cache_key in self.rerank_cache:
+            return self.rerank_cache[cache_key]
+
+        documents = [
+            f"{r.get('title', '')} {r.get('summary', '') or r.get('snippet', '')}"[:RERANK_DOC_MAXLEN]
+            for r in candidates
+        ]
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.search_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": RERANK_MODEL,
+                "query": query,
+                "documents": documents,
+                "return_documents": False,
+            }
+            async with BOCHA_SEM:
+                response = await asyncio.to_thread(
+                    requests.post, RERANK_API_URL,
+                    headers=headers, json=payload, timeout=30,
+                )
+            if response.status_code != 200:
+                raise RuntimeError(f"rerank http {response.status_code}")
+            data = response.json()
+            if data.get("code") != 200:
+                raise RuntimeError(f"rerank code {data.get('code')}")
+
+            scored = []
+            for item in data.get("data", {}).get("results", []):
+                idx = item.get("index")
+                score = item.get("relevance_score", 0.0)
+                if isinstance(idx, int) and 0 <= idx < len(candidates) and score >= threshold:
+                    r = dict(candidates[idx])
+                    r["relevance_score"] = score
+                    scored.append(r)
+
+            scored.sort(key=lambda r: r.get("relevance_score", 0.0), reverse=True)
+            out = scored[:top_n]
+            self.rerank_cache[cache_key] = out
+            self.logger.info(
+                f"Rerank: {len(candidates)} -> {len(out)} kept "
+                f"(threshold={threshold}) for query '{query[:30]}...'"
+            )
+            return out
+
+        except Exception as e:
+            self.logger.warning(f"[Rerank] failed, fallback to no-rerank: {e}")
+            return deduped[:top_n]
 
     async def _analyze_search_results(
         self,
