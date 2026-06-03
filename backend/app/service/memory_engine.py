@@ -85,7 +85,11 @@ class MemoryEngine:
     def _build_config() -> Dict[str, Any]:
         api_key = os.getenv("DASHSCOPE_API_KEY")
         base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        milvus_uri = os.getenv("MILVUS_URI", "http://localhost:19530")
+        milvus_uri = os.getenv("MILVUS_URI")
+        if not milvus_uri:
+            milvus_host = os.getenv("MILVUS_HOST", "localhost")
+            milvus_port = os.getenv("MILVUS_PORT", "19530")
+            milvus_uri = f"http://{milvus_host}:{milvus_port}"
         return {
             "vector_store": {
                 "provider": "milvus",

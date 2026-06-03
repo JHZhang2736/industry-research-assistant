@@ -10,6 +10,16 @@ def _make_engine_with_mock_mem():
     return engine
 
 
+def test_build_config_uses_milvus_host_and_port_when_uri_is_missing(monkeypatch):
+    monkeypatch.delenv("MILVUS_URI", raising=False)
+    monkeypatch.setenv("MILVUS_HOST", "milvus-standalone")
+    monkeypatch.setenv("MILVUS_PORT", "19530")
+
+    cfg = MemoryEngine._build_config()
+
+    assert cfg["vector_store"]["config"]["url"] == "http://milvus-standalone:19530"
+
+
 def test_remember_preferences_calls_mem_add():
     engine = _make_engine_with_mock_mem()
     msgs = [{"role": "user", "content": "报告要简洁"}]
