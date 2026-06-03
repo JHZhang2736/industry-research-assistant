@@ -67,6 +67,27 @@ def _ensure_str(value: Any) -> str:
     return str(value)
 
 
+def _tokenize_scope_text(text: str) -> List[str]:
+    separators = " ,.;:!?()[]{}<>|/\\\n\r\t\"'"
+    value = text.lower()
+    for sep in separators:
+        value = value.replace(sep, " ")
+    stopwords = {
+        "and", "or", "the", "a", "an", "of", "for", "to", "in", "on", "with",
+        "by", "from", "is", "are", "was", "were", "market", "report",
+        "analysis", "industry", "research", "2024", "2025", "2026",
+    }
+    terms = []
+    for raw in value.split():
+        term = raw.strip("-_")
+        if len(term) < 3 or term in stopwords:
+            continue
+        if term.isdigit():
+            continue
+        terms.append(term)
+    return terms
+
+
 class DeepScout(BaseAgent):
     """
     深度侦探 - 信息收集专家
@@ -292,6 +313,81 @@ URL: {url}
         self._emit_search_results_event(state)
 
         return state
+
+    async def scope_topic(
+        self,
+        state: ResearchState,
+        query: str,
+        *,
+        count: int = 3,
+        max_queries: int = 3,
+    ) -> Dict[str, Any]:
+        """Run one shallow search pass for Planner context only.
+
+        This method intentionally does not ingest facts, read URLs, analyze
+        results with an LLM, or recurse into follow-up searches.
+        """
+        base_query = (query or state.get("query", "") or "").strip()
+        planned_queries = [base_query] if base_query else []
+        research_type = state.get("research_type", "")
+        if research_type and research_type != "general" and base_query:
+            planned_queries.append(f"{base_query} {research_type}")
+        if base_query:
+            planned_queries.append(f"{base_query} latest report")
+        planned_queries = planned_queries[:max_queries]
+
+        summary = {
+            "queries": [],
+            "key_subdomains": [],
+            "initial_sources": [],
+            "hot_terms": [],
+            "source_notes": [],
+            "warning": "",
+        }
+
+        all_results: List[Dict[str, Any]] = []
+        try:
+            for scope_query in planned_queries:
+                summary["queries"].append(scope_query)
+                results = await self._execute_search(scope_query, count=count)
+                all_results.extend(results[:count])
+        except Exception as e:
+            summary["warning"] = str(e)
+            return summary
+
+        seen_urls = set()
+        term_counts: Dict[str, int] = {}
+        site_counts: Dict[str, int] = {}
+        for result in all_results:
+            url = _ensure_str(result.get("url"))
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            title = _ensure_str(result.get("title"))
+            site_name = _ensure_str(result.get("site_name"))
+            snippet = _ensure_str(result.get("summary") or result.get("snippet"))
+            if site_name:
+                site_counts[site_name] = site_counts.get(site_name, 0) + 1
+            for term in _tokenize_scope_text(f"{title} {snippet}"):
+                term_counts[term] = term_counts.get(term, 0) + 1
+            summary["initial_sources"].append({
+                "title": title[:120],
+                "url": url,
+                "site_name": site_name,
+                "date": _ensure_str(result.get("date")),
+                "snippet": snippet[:240],
+            })
+
+        summary["hot_terms"] = [
+            term for term, _ in sorted(term_counts.items(), key=lambda item: (-item[1], item[0]))[:12]
+        ]
+        summary["key_subdomains"] = summary["hot_terms"][:6]
+        summary["source_notes"] = [
+            f"{site}: {n} result(s)"
+            for site, n in sorted(site_counts.items(), key=lambda item: (-item[1], item[0]))[:6]
+        ]
+        return summary
 
     async def _supplementary_research(self, state: ResearchState) -> ResearchState:
         """
