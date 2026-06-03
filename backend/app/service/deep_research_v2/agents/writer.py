@@ -23,6 +23,21 @@ except ImportError:
     from app.service.memory_engine import get_memory_engine
 
 
+_IMPORTANCE_RANK = {"high": 2, "medium": 1, "low": 0}
+
+
+def sort_facts_by_quality(facts):
+    """按 (credibility 降序, importance 降序) 排序 facts，高质量优先进写作上下文。"""
+    return sorted(
+        facts,
+        key=lambda f: (
+            f.get("credibility_score", 0.5),
+            _IMPORTANCE_RANK.get(f.get("importance", "medium"), 1),
+        ),
+        reverse=True,
+    )
+
+
 class LeadWriter(BaseAgent):
     """
     首席笔杆 - 最终输出的打磨者
@@ -372,7 +387,9 @@ class LeadWriter(BaseAgent):
         related_facts = [f for f in state["facts"] if section_id in f.get("related_sections", [])]
         if not related_facts:
             # 如果没有特定关联，使用所有事实
-            related_facts = state["facts"][:10]
+            related_facts = list(state["facts"])
+        # 高可信优先
+        related_facts = sort_facts_by_quality(related_facts)[:10]
 
         # 格式化事实
         facts_text = []
@@ -631,7 +648,8 @@ class LeadWriter(BaseAgent):
         related_facts = [
             f for f in state.get("facts", [])
             if section_id in f.get("related_sections", [])
-        ] or list(state.get("facts", [])[:10])
+        ] or list(state.get("facts", []))
+        related_facts = sort_facts_by_quality(related_facts)[:10]
         facts_text = [
             f"- [{fact.get('id')}] {fact.get('content')} "
             f"(来源: {fact.get('source_name')}, URL: {fact.get('source_url') or fact.get('url') or 'N/A'}, "
