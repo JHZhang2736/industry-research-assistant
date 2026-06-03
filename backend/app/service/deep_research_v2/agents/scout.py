@@ -358,7 +358,10 @@ URL: {url}
 
         guarded = guard_results(
             all_results,
-            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')} {r.get('snippet', '')}",
+            text_of=lambda r: (
+                f"{r.get('title', '')} {r.get('summary', '')} "
+                f"{r.get('snippet', '')} {r.get('site_name', '')}"
+            ),
         )
         for dropped, verdict in guarded.dropped:
             self.logger.warning(
@@ -1240,7 +1243,7 @@ URL: {url}
     async def _execute_search(self, query: str, count: int = 10) -> List[Dict]:
         """执行网络搜索 - 使用 Bocha Web Search API"""
         # 检查缓存
-        cache_key = hashlib.md5(query.encode()).hexdigest()
+        cache_key = hashlib.md5(f"{query}|count={count}".encode()).hexdigest()
         if cache_key in self.search_cache:
             self.logger.debug(f"Cache hit for query: {query[:30]}...")
             return self.search_cache[cache_key]
