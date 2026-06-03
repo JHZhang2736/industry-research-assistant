@@ -57,6 +57,11 @@ except ImportError:
     except ImportError:
         MILVUS_AVAILABLE = False
 
+try:
+    from service.deep_research_v2.source_scoring import final_credibility
+except ImportError:
+    from app.service.deep_research_v2.source_scoring import final_credibility
+
 
 def _ensure_str(value: Any) -> str:
     """把 LLM 偶尔返回的非字符串字段强制转为字符串。
@@ -387,18 +392,25 @@ URL: {url}
 
                 if analysis:
                     # 添加新事实
+                    url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
                     for fact in analysis.get("extracted_facts", []):
                         content = _ensure_str(fact.get("content"))
                         source_url = _ensure_str(fact.get("source_url"))
 
                         if not self._is_duplicate_fact(content, source_url):
+                            final_cred = self._gated_credibility(
+                                fact.get("credibility_score", 0.5), source_url, url_date_map
+                            )
+                            if final_cred is None:
+                                continue
                             fact_entry = {
                                 "id": f"fact_{uuid.uuid4().hex[:8]}",
                                 "content": content,
                                 "source_url": source_url,
                                 "source_name": fact.get("source_name", ""),
                                 "source_type": fact.get("source_type", "news"),
-                                "credibility_score": fact.get("credibility_score", 0.5),
+                                "credibility_score": final_cred,
+                                "importance": fact.get("importance", "medium"),
                                 "is_supplementary": True,  # 标记为补充搜索获得
                                 "related_sections": []
                             }
@@ -724,6 +736,7 @@ URL: {url}
             # 提取事实（带去重）
             added_facts = 0
             duplicate_facts = 0
+            url_date_map = {r.get("url", ""): r.get("date", "") for r in all_results}
             for fact in analysis.get("extracted_facts", []):
                 content = _ensure_str(fact.get("content"))
                 source_url = _ensure_str(fact.get("source_url"))
@@ -733,13 +746,21 @@ URL: {url}
                     duplicate_facts += 1
                     continue
 
+                # 可信度闸门：低于阈值硬丢弃
+                final_cred = self._gated_credibility(
+                    fact.get("credibility_score", 0.5), source_url, url_date_map
+                )
+                if final_cred is None:
+                    continue
+
                 fact_entry = {
                     "id": f"fact_{uuid.uuid4().hex[:8]}",
                     "content": content,
                     "source_url": source_url,
                     "source_name": fact.get("source_name", ""),
                     "source_type": fact.get("source_type", "news"),
-                    "credibility_score": fact.get("credibility_score", 0.5),
+                    "credibility_score": final_cred,
+                    "importance": fact.get("importance", "medium"),
                     "extracted_at": datetime.now().isoformat(),
                     "related_sections": [section_id],
                     "verified": False,
@@ -862,6 +883,7 @@ URL: {url}
         query: str,
         search_type: str,
         depth: int,
+        url_date_map: Optional[Dict[str, str]] = None,
     ) -> int:
         """Append extracted facts + data_points from one analysis result into state.
 
@@ -873,19 +895,27 @@ URL: {url}
             no other coroutine can interleave between read and append (no await
             inside the dedup check).
         """
+        url_date_map = url_date_map or {}
         added_facts = 0
         for fact in analysis.get("extracted_facts", []):
             content = _ensure_str(fact.get("content"))
             source_url = _ensure_str(fact.get("source_url"))
 
             if not self._is_duplicate_fact(content, source_url):
+                final_cred = self._gated_credibility(
+                    fact.get("credibility_score", 0.5), source_url, url_date_map
+                )
+                if final_cred is None:
+                    continue
+
                 fact_entry = {
                     "id": f"fact_{uuid.uuid4().hex[:8]}",
                     "content": content,
                     "source_url": source_url,
                     "source_name": fact.get("source_name", ""),
                     "source_type": fact.get("source_type", "news"),
-                    "credibility_score": fact.get("credibility_score", 0.5),
+                    "credibility_score": final_cred,
+                    "importance": fact.get("importance", "medium"),
                     "related_sections": [section_id],
                     "search_depth": depth,
                     "search_type": search_type,
@@ -999,8 +1029,9 @@ URL: {url}
                 return
 
             # 提取并添加事实（含数据点）
+            url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
             added_facts = self._ingest_facts(
-                state, analysis, section_id, query, search_type, depth
+                state, analysis, section_id, query, search_type, depth, url_date_map
             )
 
             self.logger.info(
@@ -1569,6 +1600,18 @@ URL: {r.get('url', '')}
         # 保存指纹
         self.fact_fingerprints[fingerprint] = source_url
         return False
+
+    def _gated_credibility(self, llm_score, source_url: str, url_date_map: Dict[str, str]):
+        """计算 fact 的最终可信度并应用硬丢弃阈值。
+
+        返回 final_credibility（>= CREDIBILITY_FLOOR）或 None（应丢弃）。
+        date 从本批搜索结果的 url->date 映射里取（客观、来自 Bocha）。
+        """
+        date = url_date_map.get(source_url, "")
+        final = final_credibility(llm_score, source_url, date)
+        if final < CREDIBILITY_FLOOR:
+            return None
+        return final
 
     def _update_hypothesis_status(self, state: ResearchState, evidence: List[Dict]) -> None:
         """根据证据更新假设状态"""
