@@ -167,6 +167,11 @@ class ResearchState(TypedDict):
     intent: str                              # "deep_research" | "web_search" | "simple_qa" | "out_of_scope"
     research_type: str                       # deep_research 专用，默认 "general"
 
+    # Planning scoping and approval
+    scoping_summary: Dict[str, Any]          # Shallow search topic map for Planner only
+    outline_approval_status: str            # pending | approved | skipped
+    approved_outline: List[Dict[str, Any]]   # User-confirmed editable outline copy
+
     # 规划输出
     outline: List[Dict[str, Any]]           # 动态大纲 (Section序列化)
     mind_map: Dict[str, Any]                # 知识图谱/思维导图
@@ -238,6 +243,9 @@ def create_initial_state(
         search_local=search_local,
         intent="",
         research_type="general",
+        scoping_summary={},
+        outline_approval_status="pending",
+        approved_outline=[],
         outline=[],
         mind_map={},
         key_entities=[],

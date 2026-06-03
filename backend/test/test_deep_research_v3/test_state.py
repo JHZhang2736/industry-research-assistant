@@ -105,3 +105,11 @@ def test_research_state_critic_loop_fields_default_empty():
     assert state["revision_context_by_section"] == {}
     assert state["critic_diagnostics"] == []
     assert state["critic_loop_status"] == ""
+
+
+def test_research_state_scoping_and_outline_approval_defaults():
+    state = create_initial_state(query="q", session_id="s")
+
+    assert state["scoping_summary"] == {}
+    assert state["outline_approval_status"] == "pending"
+    assert state["approved_outline"] == []
