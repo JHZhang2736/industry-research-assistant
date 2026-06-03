@@ -89,3 +89,36 @@ async def test_research_section_ingest_applies_gate(scout, monkeypatch):
     a = next(f for f in state["facts"] if f["content"] == "权威事实 A")
     assert a["importance"] == "high"          # importance 落库
     assert a["credibility_score"] > 0.9       # 存的是 final_credibility
+
+
+@pytest.mark.asyncio
+async def test_research_section_interleaves_and_dedups(scout, monkeypatch):
+    captured = {}
+
+    async def fake_analyze(query, section, results, hypotheses=None, state=None):
+        captured["results"] = results
+        return {"extracted_facts": []}
+    monkeypatch.setattr(scout, "_analyze_search_results", AsyncMock(side_effect=fake_analyze))
+
+    # 两个 query：q1 返回 [a,b]，q2 返回 [b,c]（b 重复）
+    async def fake_search(query, count=10):
+        if query == "q1":
+            return [{"url": "a", "title": "a", "summary": "s", "site_name": "x", "date": ""},
+                    {"url": "b", "title": "b", "summary": "s", "site_name": "x", "date": ""}]
+        return [{"url": "b", "title": "b", "summary": "s", "site_name": "x", "date": ""},
+                {"url": "c", "title": "c", "summary": "s", "site_name": "x", "date": ""}]
+    monkeypatch.setattr(scout, "_execute_search", AsyncMock(side_effect=fake_search))
+
+    state = {
+        "query": "Q", "facts": [], "data_points": [], "insights": [],
+        "hypotheses": [], "iteration": 99, "max_iterations": 1,
+        "search_web": True, "search_local": False, "messages": [], "phase": "researching",
+    }
+    section = {"id": "s1", "title": "章节", "search_queries": ["q1", "q2"]}
+
+    await scout._research_section(state, section)
+
+    urls = [r["url"] for r in captured["results"]]
+    # 去重后只剩 a,b,c；轮转顺序 a(q1), b(q2 first since q1's b... ) — 关键断言：去重且都在
+    assert sorted(urls) == ["a", "b", "c"]
+    assert len(urls) == 3   # b 去重

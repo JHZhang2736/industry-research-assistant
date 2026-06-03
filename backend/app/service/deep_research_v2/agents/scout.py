@@ -578,6 +578,7 @@ URL: {url}
             "source_url": "来源URL",
             "source_type": "official/academic/news/report",
             "credibility_score": 0.0-1.0,
+            "importance": "high/medium/low",
             "data_points": [
                 {{"name": "指标名", "value": "数值", "unit": "单位"}}
             ]
@@ -640,12 +641,16 @@ URL: {url}
         })
 
         # 逐个执行搜索，每完成一个就发送事件（提升用户体验）
+        # all_results 仅用于进度展示的累计计数；result_lists 保留各 query 的分组，
+        # 供 interleave_unique 做轮转去重，避免某个 query 刷屏挤掉其它 query。
         all_results = []
+        result_lists = []
         for i, query in enumerate(search_queries):
             # 网络搜索
             if search_web:
                 results = await self._execute_search(query)
                 all_results.extend(results)
+                result_lists.append(results)
 
                 # 搜索完成后立即发送原始结果（让用户看到进度）
                 if results:
@@ -682,6 +687,7 @@ URL: {url}
             if search_local:
                 local_results = await self._execute_local_search(query)
                 all_results.extend(local_results)
+                result_lists.append(local_results)
 
                 if local_results:
                     self.add_message(state, "search_progress", {
@@ -713,6 +719,9 @@ URL: {url}
                         "isIncremental": True,
                         "searchType": "local"
                     })
+
+        # 轮转去重 + 截断到 rerank 上限（公平采样各 query，再交给 rerank）
+        all_results = interleave_unique(result_lists, cap=MAX_RERANK_DOCS)
 
         if not all_results:
             self.logger.warning(f"No search results for section: {section_title}")
@@ -1124,6 +1133,7 @@ URL: {url}
             "source_url": "来源URL",
             "source_type": "official/academic/news/report",
             "credibility_score": 0.0-1.0,
+            "importance": "high/medium/low",
             "related_hypothesis": "h_1或null",
             "hypothesis_support": "supports/refutes/neutral"
         }}
