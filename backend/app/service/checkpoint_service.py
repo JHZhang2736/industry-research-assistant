@@ -31,6 +31,7 @@ class CheckpointService:
         user_id: Optional[str] = None,
         ui_state: Optional[Dict[str, Any]] = None,
         final_report: Optional[str] = None,
+        status: str = "running",
     ) -> Optional[str]:
         """
         保存检查点
@@ -70,7 +71,7 @@ class CheckpointService:
                     existing.ui_state_json = clean_ui_state
                 if final_report:
                     existing.final_report = final_report
-                existing.status = "running"
+                existing.status = status
                 existing.updated_at = datetime.utcnow()
                 checkpoint_id = str(existing.id)
             else:
@@ -84,7 +85,7 @@ class CheckpointService:
                     state_json=clean_state,
                     ui_state_json=clean_ui_state,
                     final_report=final_report,
-                    status="running",
+                    status=status,
                 )
                 db.add(checkpoint)
                 db.flush()

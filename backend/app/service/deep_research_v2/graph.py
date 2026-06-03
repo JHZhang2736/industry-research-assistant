@@ -376,7 +376,8 @@ class DeepResearchGraph:
         self,
         state: Dict[str, Any],
         user_id: str = None,
-        ui_state: Dict[str, Any] = None
+        ui_state: Dict[str, Any] = None,
+        status: str = "running",
     ) -> bool:
         """保存检查点（包含后端状态和 UI 状态）"""
         if not self.checkpoint_service:
@@ -392,7 +393,8 @@ class DeepResearchGraph:
                 state=state,
                 user_id=user_id,
                 ui_state=ui_state,
-                final_report=state.get("final_report")
+                final_report=state.get("final_report"),
+                status=status,
             )
             if checkpoint_id:
                 logger.info(f"Checkpoint saved: {checkpoint_id}")
@@ -440,13 +442,15 @@ class DeepResearchGraph:
         sub = StateGraph(ResearchState)
 
         sub.add_node("research_type_router", self._research_type_router_node)
+        sub.add_node("scoping", self._scoping_node)
         sub.add_node("planner", self._planner_node)
         sub.add_node("executor", executor_node)
         sub.add_node("critic", self._critic_node)
         sub.add_node("replanner", self._replanner_node)
 
         sub.set_entry_point("research_type_router")
-        sub.add_edge("research_type_router", "planner")
+        sub.add_edge("research_type_router", "scoping")
+        sub.add_edge("scoping", "planner")
         sub.add_edge("planner", "executor")
         sub.add_edge("executor", "critic")
 
@@ -554,6 +558,42 @@ class DeepResearchGraph:
             pass
 
         return {"research_type": result.research_type}
+
+    async def _scoping_node(self, state: ResearchState) -> Dict[str, Any]:
+        """Run shallow topic scoping before planning."""
+        self._maybe_cancel(state)
+        self._emit_phase_start("scoping", "Starting research scoping...")
+        logger.info("Executing Scoping node...")
+
+        try:
+            summary = await self.scout.scope_topic(
+                state,
+                state.get("query", ""),
+                count=3,
+                max_queries=3,
+            )
+            if not isinstance(summary, dict):
+                summary = {"warning": "Scoping returned an invalid summary."}
+        except Exception as e:
+            logger.warning(f"Scoping failed; continuing with warning summary: {e}")
+            summary = {
+                "warning": str(e),
+                "queries": [],
+                "key_subdomains": [],
+                "initial_sources": [],
+                "hot_terms": [],
+            }
+
+        self._emit_event("research_step", {
+            "step_type": "scoping",
+            "title": "Research scoping",
+            "status": "completed",
+            "stats": {
+                "sources": len(summary.get("initial_sources", []) or []),
+                "hot_terms": len(summary.get("hot_terms", []) or []),
+            },
+        })
+        return {"scoping_summary": summary}
 
     def _maybe_cancel(self, state: ResearchState) -> None:
         """在每个节点入口调用：检查 Redis 取消标志，命中则抛 CancelledError。"""
@@ -746,6 +786,7 @@ class DeepResearchGraph:
             "out_of_scope", "deep_research",
         }
         node_to_phase_info = {
+            "scoping": ("scoping", "Scoping completed"),
             "planner": ("planning", "规划完成"),
             "executor": ("executing", "执行批次完成"),
             "critic": ("reviewing", "审核完成"),
@@ -817,6 +858,30 @@ class DeepResearchGraph:
                         )
                         if cp_event:
                             yield cp_event
+
+                        if (
+                            node_name == "planner"
+                            and last_state.get("outline_approval_status", "pending") == "pending"
+                        ):
+                            self._save_checkpoint(
+                                last_state,
+                                user_id,
+                                ui_state,
+                                status="paused",
+                            )
+                            yield {
+                                "type": "outline_approval_required",
+                                "session_id": session_id,
+                                "outline": last_state.get("outline", []),
+                                "scoping_summary": last_state.get("scoping_summary", {}),
+                            }
+                            self._tag_root(
+                                root_run_id,
+                                base_tags,
+                                last_state,
+                                extra_tags=["status:paused"],
+                            )
+                            return
 
         except asyncio.CancelledError as e:
             logger.info(f"LangGraph execution cancelled: {e}")
@@ -952,6 +1017,7 @@ class DeepResearchGraph:
         # 节点 -> 步骤类型（v3 4-node 主图）
         # executor 内部包含 search/analyze/charts/write，stats 时按内容字段量分支
         step_type_map = {
+            "scoping": "scoping",
             "planner": "planning",
             "executor": "executing",
             "critic": "reviewing",
@@ -960,7 +1026,13 @@ class DeepResearchGraph:
         step_type = step_type_map.get(node_name, node_name)
 
         # 节点 -> stats
-        if step_type == "planning":
+        if step_type == "scoping":
+            scoping_summary = state.get("scoping_summary", {}) or {}
+            stats = {
+                "sources": len(scoping_summary.get("initial_sources", []) or []),
+                "hot_terms": len(scoping_summary.get("hot_terms", []) or []),
+            }
+        elif step_type == "planning":
             stats = {"sections": len(state.get("outline", []))}
         elif step_type == "executing":
             stats = {
