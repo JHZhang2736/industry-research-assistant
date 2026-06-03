@@ -67,6 +67,36 @@ def _ensure_str(value: Any) -> str:
     return str(value)
 
 
+def interleave_unique(result_lists, cap: int = 50):
+    """跨多个 query 的结果列表做轮转(round-robin) + URL 去重 + 截断到 cap。
+
+    目的：当一个章节多个 query 的结果合并后可能超过 Bocha rerank 单次 50 篇上限时，
+    公平地从各 query 取样（而非被某个 query 刷屏），并去掉重复 URL。
+    """
+    seen = set()
+    out = []
+    if not result_lists:
+        return out
+    idx = 0
+    remaining = True
+    while remaining and len(out) < cap:
+        remaining = False
+        for lst in result_lists:
+            if idx < len(lst):
+                remaining = True
+                r = lst[idx]
+                u = r.get("url", "")
+                if u and u in seen:
+                    continue
+                if u:
+                    seen.add(u)
+                out.append(r)
+                if len(out) >= cap:
+                    break
+        idx += 1
+    return out
+
+
 class DeepScout(BaseAgent):
     """
     深度侦探 - 信息收集专家
