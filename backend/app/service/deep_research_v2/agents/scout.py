@@ -530,16 +530,17 @@ URL: {url}
     ) -> Optional[Dict]:
         """分析补充搜索结果"""
         guarded = guard_results(
-            results[:8],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
             self.logger.warning(
                 f"[InjectionGuard] 补充搜索丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
             )
+        reranked = await self._rerank(search_query, guarded.kept)
         results_text = []
-        for r in guarded.kept:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+        for r in reranked:
+            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1000]}")
 
         prompt = f"""你是一位专业的研究分析师，正在补充搜索以解决审核发现的信息缺失问题。
 
@@ -1045,16 +1046,17 @@ URL: {url}
     ) -> Optional[Dict]:
         """分析深度搜索结果"""
         guarded = guard_results(
-            results[:6],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
             self.logger.warning(
                 f"[InjectionGuard] deep_search 丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
             )
+        reranked = await self._rerank(search_query, guarded.kept)
         results_text = []
-        for r in guarded.kept:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+        for r in reranked:
+            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1000]}")
 
         hypotheses_text = ""
         if hypotheses:
@@ -1340,9 +1342,9 @@ URL: {url}
         if not results:
             return None
 
-        # 注入防护：丢弃可疑结果
+        # 注入防护：先丢弃可疑结果（在 rerank 前，不浪费 rerank 名额）
         guarded = guard_results(
-            results[:15],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
@@ -1351,15 +1353,19 @@ URL: {url}
                 f"{verdict.matched_patterns}"
             )
 
+        # 语义 rerank：按章节相关性排序 + 阈值过滤，取 top_n
+        rerank_query = section.get("title") or query
+        reranked = await self._rerank(rerank_query, guarded.kept)
+
         # 格式化保留的搜索结果
         formatted_results = []
-        for i, r in enumerate(guarded.kept):
+        for i, r in enumerate(reranked):
             formatted_results.append(f"""
 [{i+1}] {r.get('title', 'N/A')}
 URL: {r.get('url', '')}
 来源: {r.get('site_name', 'N/A')}
 日期: {r.get('date', 'N/A')}
-摘要: {r.get('summary', '')[:300]}
+摘要: {r.get('summary', '')[:1000]}
 """)
 
         # 格式化假设
