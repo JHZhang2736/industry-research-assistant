@@ -696,6 +696,189 @@ class DeepResearchGraph:
         result = await self.replanner.process(state, suggested_actions=suggested)
         return result
 
+    def _validate_approved_outline(
+        self,
+        state: ResearchState,
+        approved_outline: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        saved_outline = state.get("outline", []) or []
+        if len(approved_outline) != len(saved_outline):
+            raise ValueError("Approved outline section count does not match saved outline")
+
+        saved_ids = [section.get("id") for section in saved_outline]
+        approved_ids = [section.get("id") for section in approved_outline]
+        if approved_ids != saved_ids:
+            raise ValueError("Approved outline section ids/order do not match saved outline")
+
+        merged_outline = []
+        for saved_section, approved_section in zip(saved_outline, approved_outline):
+            title = str(approved_section.get("title", "") or "").strip()
+            if not title:
+                raise ValueError("Approved outline section title cannot be empty")
+
+            description = approved_section.get(
+                "description",
+                saved_section.get("description", ""),
+            )
+            merged_section = dict(saved_section)
+            merged_section["title"] = title[:120]
+            merged_section["description"] = str(description or "").strip()[:1000]
+            merged_outline.append(merged_section)
+
+        return merged_outline
+
+    def _load_pending_outline_approval_state(self, session_id: str) -> Dict[str, Any]:
+        state = self._load_checkpoint(session_id)
+        if not state:
+            raise ValueError("No checkpoint found for this session")
+
+        if state.get("outline_approval_status") != "pending":
+            raise RuntimeError("Outline approval is not pending")
+
+        return state
+
+    def preflight_continue_with_approved_outline(
+        self,
+        session_id: str,
+        approved_outline: List[Dict[str, Any]],
+    ) -> None:
+        state = self._load_pending_outline_approval_state(session_id)
+        self._validate_approved_outline(state, approved_outline)
+
+    async def _run_from_executor(
+        self,
+        state: ResearchState,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        user_id = state.get("_user_id")
+        session_id = state.get("session_id", "")
+        if session_id:
+            clear_cancel_flag(session_id)
+
+        ui_state = {
+            "research_steps": [],
+            "search_results": [],
+            "charts": [],
+            "streaming_report": "",
+        }
+        last_state: Dict[str, Any] = dict(state)
+
+        node_to_phase_info = {
+            "executor": ("executing", "执行批次完成"),
+            "critic": ("reviewing", "审核完成"),
+            "replanner": ("replanning", "重规划完成"),
+        }
+
+        async def run_node(node_name: str, node_callable):
+            result = await node_callable(last_state)
+            if not isinstance(result, dict):
+                result = {}
+            last_state.update(result)
+
+            phase_key, phase_msg = node_to_phase_info.get(
+                node_name,
+                (node_name, f"{node_name} completed"),
+            )
+            yield {
+                "type": "phase",
+                "phase": phase_key,
+                "content": phase_msg,
+            }
+
+            cp_event = self._build_checkpoint_event(
+                last_state,
+                user_id,
+                ui_state,
+                node_name,
+            )
+            if cp_event:
+                yield cp_event
+
+        try:
+            while True:
+                async for event in run_node("executor", executor_node):
+                    yield event
+
+                async for event in run_node("critic", self._critic_node):
+                    yield event
+
+                if route_after_critic(last_state) == "END":
+                    break
+
+                async for event in run_node("replanner", self._replanner_node):
+                    yield event
+
+                if route_after_replanner(last_state) != "executor":
+                    break
+
+        except asyncio.CancelledError as e:
+            logger.info(f"Executor resume cancelled: {e}")
+            if self.checkpoint_service and session_id:
+                try:
+                    self.checkpoint_service.update_status(session_id, "cancelled")
+                except Exception as e:
+                    logger.debug(f"update_status(cancelled) failed (non-fatal): {e}")
+            yield {"type": "research_cancelled", "message": "研究已取消"}
+            return
+
+        except Exception as e:
+            logger.error(f"Executor resume error: {e}", exc_info=True)
+            if self.checkpoint_service and session_id:
+                try:
+                    self.checkpoint_service.update_status(session_id, "failed", str(e))
+                except Exception as e:
+                    logger.debug(f"update_status(failed) failed (non-fatal): {e}")
+            yield {"type": "error", "content": str(e)}
+            return
+
+        if self.checkpoint_service and session_id:
+            try:
+                self.checkpoint_service.update_status(session_id, "completed")
+            except Exception as e:
+                logger.debug(f"update_status(completed) failed (non-fatal): {e}")
+
+        yield self._build_completion_event(last_state)
+
+        try:
+            _t = asyncio.create_task(
+                asyncio.to_thread(_writeback_research_memory, get_memory_engine(), last_state)
+            )
+            _MEMORY_TASKS.add(_t)
+            _t.add_done_callback(_MEMORY_TASKS.discard)
+        except Exception:
+            pass
+
+    async def continue_with_approved_outline(
+        self,
+        session_id: str,
+        approved_outline: List[Dict[str, Any]],
+        user_id: str = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        state = self._load_pending_outline_approval_state(session_id)
+        merged_outline = self._validate_approved_outline(state, approved_outline)
+        refreshed_plan = self.planner.refresh_plan_queries(
+            state.get("query", ""),
+            merged_outline,
+            state.get("plan", []) or [],
+        )
+
+        state["outline"] = merged_outline
+        state["approved_outline"] = merged_outline
+        state["outline_approval_status"] = "approved"
+        state["plan"] = refreshed_plan
+        if user_id is not None:
+            state["_user_id"] = user_id
+
+        self._save_checkpoint(state, user_id, status="running")
+
+        yield {
+            "type": "outline_approved",
+            "session_id": session_id,
+            "outline": merged_outline,
+        }
+
+        async for event in self._run_from_executor(state):
+            yield event
+
 
     async def run(
         self,

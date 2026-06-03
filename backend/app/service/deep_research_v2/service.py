@@ -136,6 +136,29 @@ class DeepResearchV2Service:
         # 发送结束标记
         yield "data: [DONE]\n\n"
 
+    async def continue_research(
+        self,
+        session_id: str,
+        approved_outline: list[dict],
+        user_id: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Continue a paused research run after outline approval."""
+        try:
+            async for event in self.graph.continue_with_approved_outline(
+                session_id=session_id,
+                approved_outline=approved_outline,
+                user_id=user_id,
+            ):
+                yield self._format_sse(event)
+        except Exception as e:
+            logger.error(f"Continue research error: {e}", exc_info=True)
+            yield self._format_sse({
+                "type": "error",
+                "content": str(e),
+            })
+        finally:
+            yield "data: [DONE]\n\n"
+
     def _format_sse(self, event: Dict[str, Any]) -> str:
         """格式化为 SSE 事件"""
         return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
