@@ -13,6 +13,7 @@ DeepResearch V2.0 - 深度侦探 Agent (DeepScout)
 import uuid
 import asyncio
 import hashlib
+import re
 import requests
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -68,23 +69,23 @@ def _ensure_str(value: Any) -> str:
 
 
 def _tokenize_scope_text(text: str) -> List[str]:
-    separators = " ,.;:!?()[]{}<>|/\\\n\r\t\"'"
-    value = text.lower()
-    for sep in separators:
-        value = value.replace(sep, " ")
     stopwords = {
         "and", "or", "the", "a", "an", "of", "for", "to", "in", "on", "with",
         "by", "from", "is", "are", "was", "were", "market", "report",
         "analysis", "industry", "research", "2024", "2025", "2026",
     }
     terms = []
-    for raw in value.split():
+    value = (text or "").lower()
+    for raw in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9][a-z0-9_-]*", value):
         term = raw.strip("-_")
         if len(term) < 3 or term in stopwords:
             continue
         if term.isdigit():
             continue
-        terms.append(term)
+        if re.search(r"[\u4e00-\u9fff]", term):
+            terms.extend(term[i:i + 8] for i in range(0, len(term), 8))
+        else:
+            terms.append(term)
     return terms
 
 
@@ -355,10 +356,20 @@ URL: {url}
             summary["warning"] = str(e)
             return summary
 
+        guarded = guard_results(
+            all_results,
+            text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')} {r.get('snippet', '')}",
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] scoping search discarded {dropped.get('url', '')}: "
+                f"{verdict.matched_patterns}"
+            )
+
         seen_urls = set()
         term_counts: Dict[str, int] = {}
         site_counts: Dict[str, int] = {}
-        for result in all_results:
+        for result in guarded.kept:
             url = _ensure_str(result.get("url"))
             if url and url in seen_urls:
                 continue
