@@ -359,8 +359,10 @@ URL: {url}
         guarded = guard_results(
             all_results,
             text_of=lambda r: (
-                f"{r.get('title', '')} {r.get('summary', '')} "
-                f"{r.get('snippet', '')} {r.get('site_name', '')}"
+                f"{r.get('title', '')}\n"
+                f"{r.get('site_name', '')}\n"
+                f"{r.get('summary', '')}\n"
+                f"{r.get('snippet', '')}"
             ),
         )
         for dropped, verdict in guarded.dropped:
