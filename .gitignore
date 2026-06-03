@@ -201,8 +201,7 @@ backend/docs/
 CLAUDE.local.md
 
 # Eval framework runtime output
-docs/eval-results/*
-!docs/eval-results/.gitkeep
+docs
 backend/app/eval/.eval.db
 backend/app/eval/.eval.db-*
 
