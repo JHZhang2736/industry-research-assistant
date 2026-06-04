@@ -98,6 +98,89 @@ async def test_scope_topic_skips_web_search_when_web_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scope_topic_uses_local_search_when_web_disabled(monkeypatch):
+    scout = DeepScout(
+        llm_api_key="dummy",
+        llm_base_url="http://dummy",
+        search_api_key="dummy",
+        model="qwen-plus",
+    )
+
+    async def forbidden_execute_search(*args, **kwargs):
+        raise AssertionError("web search must not run when search_web is false")
+
+    async def fake_execute_local_search(query, top_k=5):
+        return [
+            {
+                "url": "local://doc-1",
+                "title": "Private local market brief",
+                "summary": "confidential internal demand policy evidence",
+                "snippet": "confidential internal demand policy evidence",
+                "site_name": "Local Knowledge Base",
+                "date": "2026-01-03",
+            }
+        ]
+
+    monkeypatch.setattr(scout, "_execute_search", forbidden_execute_search)
+    monkeypatch.setattr(scout, "_execute_local_search", fake_execute_local_search)
+
+    state = create_initial_state("private local query", "sid_1", search_web=False)
+    state["search_local"] = True
+    summary = await scout.scope_topic(state, "private local query", count=1, max_queries=1)
+
+    assert summary["warning"] == ""
+    assert summary["initial_sources"][0]["url"] == "local://doc-1"
+    assert summary["initial_sources"][0]["site_name"] == "Local Knowledge Base"
+    assert "confidential" in summary["hot_terms"]
+    assert state["facts"] == []
+
+
+@pytest.mark.asyncio
+async def test_scope_topic_keeps_local_results_when_web_also_enabled(monkeypatch):
+    scout = DeepScout(
+        llm_api_key="dummy",
+        llm_base_url="http://dummy",
+        search_api_key="dummy",
+        model="qwen-plus",
+    )
+
+    async def fake_execute_search(query, count=10):
+        return [
+            {
+                "url": "https://example.com/web",
+                "title": "Public market brief",
+                "summary": "public demand policy evidence",
+                "snippet": "public demand policy evidence",
+                "site_name": "Web Research",
+                "date": "2026-01-04",
+            }
+        ]
+
+    async def fake_execute_local_search(query, top_k=5):
+        return [
+            {
+                "url": "local://doc-1",
+                "title": "Internal market brief",
+                "summary": "internal demand policy evidence",
+                "snippet": "internal demand policy evidence",
+                "site_name": "Local Knowledge Base",
+                "date": "2026-01-05",
+            }
+        ]
+
+    monkeypatch.setattr(scout, "_execute_search", fake_execute_search)
+    monkeypatch.setattr(scout, "_execute_local_search", fake_execute_local_search)
+
+    state = create_initial_state("hybrid query", "sid_1")
+    state["search_local"] = True
+    summary = await scout.scope_topic(state, "hybrid query", count=1, max_queries=1)
+
+    source_urls = {source["url"] for source in summary["initial_sources"]}
+    assert source_urls == {"https://example.com/web", "local://doc-1"}
+    assert "internal" in summary["hot_terms"]
+
+
+@pytest.mark.asyncio
 async def test_scope_topic_filters_prompt_injection_results(monkeypatch):
     scout = DeepScout(
         llm_api_key="dummy",

@@ -357,12 +357,12 @@ URL: {url}
         try:
             for scope_query in planned_queries:
                 summary["queries"].append(scope_query)
-                results: List[Dict[str, Any]] = []
                 if search_web:
-                    results.extend(await self._execute_search(scope_query, count=count))
+                    web_results = await self._execute_search(scope_query, count=count)
+                    all_results.extend(web_results[:count])
                 if search_local:
-                    results.extend(await self._execute_local_search(scope_query, top_k=count))
-                all_results.extend(results[:count])
+                    local_results = await self._execute_local_search(scope_query, top_k=count)
+                    all_results.extend(local_results[:count])
         except Exception as e:
             summary["warning"] = str(e)
             return summary
