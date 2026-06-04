@@ -745,6 +745,58 @@ class DeepResearchGraph:
         state = self._load_pending_outline_approval_state(session_id)
         self._validate_approved_outline(state, approved_outline)
 
+    def prepare_continue_with_approved_outline(
+        self,
+        session_id: str,
+        approved_outline: List[Dict[str, Any]],
+        user_id: str = None,
+    ) -> Dict[str, Any]:
+        state = self._load_pending_outline_approval_state(session_id)
+        merged_outline = self._validate_approved_outline(state, approved_outline)
+
+        refreshed_plan = self.planner.refresh_plan_queries(
+            state.get("query", ""),
+            merged_outline,
+            state.get("plan", []) or [],
+        )
+
+        if self.checkpoint_service and hasattr(self.checkpoint_service, "claim_paused_checkpoint"):
+            claimed = self.checkpoint_service.claim_paused_checkpoint(session_id)
+            if not claimed:
+                raise RuntimeError("Outline approval is not pending")
+
+        state["outline"] = merged_outline
+        state["approved_outline"] = merged_outline
+        state["outline_approval_status"] = "approved"
+        state["plan"] = refreshed_plan
+        if user_id is not None:
+            state["_user_id"] = user_id
+
+        self._save_checkpoint(state, user_id, status="running")
+        return state
+
+    def _build_executor_resume_graph(self):
+        sub = StateGraph(ResearchState)
+
+        sub.add_node("executor", executor_node)
+        sub.add_node("critic", self._critic_node)
+        sub.add_node("replanner", self._replanner_node)
+
+        sub.set_entry_point("executor")
+        sub.add_edge("executor", "critic")
+        sub.add_conditional_edges(
+            "critic",
+            route_after_critic,
+            {"END": END, "replanner": "replanner"},
+        )
+        sub.add_conditional_edges(
+            "replanner",
+            route_after_replanner,
+            {"END": END, "executor": "executor"},
+        )
+
+        return sub.compile()
+
     async def _run_from_executor(
         self,
         state: ResearchState,
@@ -768,47 +820,57 @@ class DeepResearchGraph:
             "replanner": ("replanning", "重规划完成"),
         }
 
-        async def run_node(node_name: str, node_callable):
-            result = await node_callable(last_state)
-            if not isinstance(result, dict):
-                result = {}
-            last_state.update(result)
-
-            phase_key, phase_msg = node_to_phase_info.get(
-                node_name,
-                (node_name, f"{node_name} completed"),
-            )
-            yield {
-                "type": "phase",
-                "phase": phase_key,
-                "content": phase_msg,
-            }
-
-            cp_event = self._build_checkpoint_event(
-                last_state,
-                user_id,
-                ui_state,
-                node_name,
-            )
-            if cp_event:
-                yield cp_event
-
         try:
-            while True:
-                async for event in run_node("executor", executor_node):
-                    yield event
+            query = state.get("query", "")
+            run_label = query[:40].replace("\n", " ").strip() if query else ""
+            trace_config = {
+                "run_id": uuid.uuid4(),
+                "run_name": f"research-continue: {run_label}" if run_label else "research-continue",
+                "metadata": {
+                    "session_id": session_id,
+                    "query": query,
+                    "resume_from": "executor",
+                },
+                "tags": ["deep_research_v3", "resume_from_executor"],
+            }
+            resume_graph = self._build_executor_resume_graph()
 
-                async for event in run_node("critic", self._critic_node):
-                    yield event
+            async for _ns, mode, chunk in resume_graph.astream(
+                last_state,
+                config=trace_config,
+                stream_mode=["custom", "updates"],
+                subgraphs=True,
+            ):
+                if mode == "custom":
+                    yield chunk
+                    continue
 
-                if route_after_critic(last_state) == "END":
-                    break
+                if mode != "updates":
+                    continue
 
-                async for event in run_node("replanner", self._replanner_node):
-                    yield event
+                for node_name, node_diff in chunk.items():
+                    if not isinstance(node_diff, dict):
+                        continue
+                    last_state.update(node_diff)
 
-                if route_after_replanner(last_state) != "executor":
-                    break
+                    phase_key, phase_msg = node_to_phase_info.get(
+                        node_name,
+                        (node_name, f"{node_name} completed"),
+                    )
+                    yield {
+                        "type": "phase",
+                        "phase": phase_key,
+                        "content": phase_msg,
+                    }
+
+                    cp_event = self._build_checkpoint_event(
+                        last_state,
+                        user_id,
+                        ui_state,
+                        node_name,
+                    )
+                    if cp_event:
+                        yield cp_event
 
         except asyncio.CancelledError as e:
             logger.info(f"Executor resume cancelled: {e}")
@@ -847,36 +909,31 @@ class DeepResearchGraph:
         except Exception:
             pass
 
+    async def continue_prepared_outline(
+        self,
+        state: ResearchState,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        yield {
+            "type": "outline_approved",
+            "session_id": state.get("session_id", ""),
+            "outline": state.get("outline", []),
+        }
+
+        async for event in self._run_from_executor(state):
+            yield event
+
     async def continue_with_approved_outline(
         self,
         session_id: str,
         approved_outline: List[Dict[str, Any]],
         user_id: str = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        state = self._load_pending_outline_approval_state(session_id)
-        merged_outline = self._validate_approved_outline(state, approved_outline)
-        refreshed_plan = self.planner.refresh_plan_queries(
-            state.get("query", ""),
-            merged_outline,
-            state.get("plan", []) or [],
+        state = self.prepare_continue_with_approved_outline(
+            session_id,
+            approved_outline,
+            user_id=user_id,
         )
-
-        state["outline"] = merged_outline
-        state["approved_outline"] = merged_outline
-        state["outline_approval_status"] = "approved"
-        state["plan"] = refreshed_plan
-        if user_id is not None:
-            state["_user_id"] = user_id
-
-        self._save_checkpoint(state, user_id, status="running")
-
-        yield {
-            "type": "outline_approved",
-            "session_id": session_id,
-            "outline": merged_outline,
-        }
-
-        async for event in self._run_from_executor(state):
+        async for event in self.continue_prepared_outline(state):
             yield event
 
 

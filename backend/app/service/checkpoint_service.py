@@ -108,6 +108,36 @@ class CheckpointService:
         finally:
             db.close()
 
+    def claim_paused_checkpoint(self, session_id: str) -> bool:
+        """
+        Atomically claim a paused checkpoint for continuation.
+
+        Returns True only for the caller that transitions the checkpoint from
+        paused to running. Concurrent callers that arrive after the transition
+        get False and should not start executor work.
+        """
+        db = self._get_db()
+        try:
+            updated = db.query(ResearchCheckpoint).filter(
+                ResearchCheckpoint.session_id == session_id,
+                ResearchCheckpoint.status == "paused",
+            ).update(
+                {
+                    ResearchCheckpoint.status: "running",
+                    ResearchCheckpoint.updated_at: datetime.utcnow(),
+                },
+                synchronize_session=False,
+            )
+            db.commit()
+            return updated > 0
+
+        except Exception as e:
+            logger.error(f"Failed to claim paused checkpoint: {e}")
+            db.rollback()
+            return False
+        finally:
+            db.close()
+
     def load_checkpoint(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
         加载最新的检查点（仅后端状态）

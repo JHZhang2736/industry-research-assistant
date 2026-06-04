@@ -115,6 +115,55 @@ def test_preflight_continue_rejects_invalid_outline_before_stream(monkeypatch):
         )
 
 
+def test_prepare_continue_claims_paused_session_once():
+    graph = make_graph()
+    state = create_initial_state(query="q", session_id="s")
+    state["outline"] = [{"id": "sec_1", "title": "Old", "description": ""}]
+    state["plan"] = [{
+        "step_id": "step_search_sec_1",
+        "tool": "search_section",
+        "args": {"section_id": "sec_1", "queries": ["Old"]},
+        "depends_on": [],
+        "parallel_group": "search_batch",
+    }]
+    state["outline_approval_status"] = "pending"
+
+    class CheckpointStub:
+        def __init__(self):
+            self.claims = 0
+            self.saved = []
+
+        def load_checkpoint(self, session_id):
+            return dict(state)
+
+        def claim_paused_checkpoint(self, session_id):
+            self.claims += 1
+            return self.claims == 1
+
+        def save_checkpoint(self, session_id, state, **kwargs):
+            self.saved.append((session_id, dict(state), kwargs))
+            return "checkpoint-id"
+
+    checkpoint = CheckpointStub()
+    graph.checkpoint_service = checkpoint
+
+    prepared = graph.prepare_continue_with_approved_outline(
+        "s",
+        [{"id": "sec_1", "title": "New", "description": "New desc"}],
+        user_id="u1",
+    )
+
+    assert prepared["outline_approval_status"] == "approved"
+    assert prepared["outline"][0]["title"] == "New"
+    assert checkpoint.saved[0][2]["status"] == "running"
+
+    with pytest.raises(RuntimeError, match="Outline approval is not pending"):
+        graph.prepare_continue_with_approved_outline(
+            "s",
+            [{"id": "sec_1", "title": "Newer"}],
+        )
+
+
 @pytest.mark.asyncio
 async def test_continue_with_approved_outline_updates_state_and_streams(monkeypatch):
     graph = make_graph()
@@ -161,6 +210,36 @@ async def test_continue_with_approved_outline_updates_state_and_streams(monkeypa
     assert saved["state"]["outline_approval_status"] == "approved"
     assert saved["state"]["approved_outline"][0]["description"] == "New desc"
     assert saved["state"]["plan"][0]["args"]["queries"] == ["q", "New", "New New desc"]
+
+
+@pytest.mark.asyncio
+async def test_run_from_executor_yields_custom_stream_events(monkeypatch):
+    graph = make_graph()
+    state = create_initial_state(query="q", session_id="s")
+    state["outline_approval_status"] = "approved"
+
+    async def fake_executor(_state):
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+        writer({"type": "custom_probe", "content": {"ok": True}})
+        return {"final_report": "draft"}
+
+    async def fake_critic(_state):
+        return {
+            "verdict": "pass",
+            "quality_score": 8.0,
+            "unresolved_issues": 0,
+            "suggested_actions": [],
+        }
+
+    monkeypatch.setattr("app.service.deep_research_v2.graph.executor_node", fake_executor)
+    monkeypatch.setattr(graph, "_critic_node", fake_critic)
+
+    events = [event async for event in graph._run_from_executor(state)]
+
+    assert any(event.get("type") == "custom_probe" for event in events)
+    assert events[-1]["type"] == "research_complete"
 
 
 @pytest.mark.asyncio
@@ -316,10 +395,24 @@ def test_router_continue_streams_when_paused(monkeypatch):
         graph = type(
             "GraphStub",
             (),
-            {"preflight_continue_with_approved_outline": lambda self, *args, **kwargs: None},
+            {
+                "prepare_continue_with_approved_outline": (
+                    lambda self, session_id, approved_outline, user_id=None: {
+                        "session_id": session_id,
+                        "outline": approved_outline,
+                    }
+                )
+            },
         )()
 
-        async def continue_research(self, session_id, approved_outline, user_id=None):
+        async def continue_research(
+            self,
+            session_id,
+            approved_outline,
+            user_id=None,
+            prepared_state=None,
+        ):
+            assert prepared_state["session_id"] == session_id
             yield 'data: {"type": "outline_approved"}\n\n'
             yield "data: [DONE]\n\n"
 
@@ -343,6 +436,43 @@ def test_router_continue_streams_when_paused(monkeypatch):
     assert '"outline_approved"' in response.text
 
 
+def test_router_continue_claim_failure_returns_409_before_stream(monkeypatch):
+    research_router = import_research_router()
+
+    class CheckpointStub:
+        def get_checkpoint_info(self, session_id):
+            return {"status": "paused"}
+
+    class GraphStub:
+        def prepare_continue_with_approved_outline(self, *args, **kwargs):
+            raise RuntimeError("Outline approval is not pending")
+
+    class ServiceStub:
+        graph = GraphStub()
+
+        async def continue_research(self, *args, **kwargs):
+            raise AssertionError("stream must not start when claim fails")
+            yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(
+        "service.checkpoint_service.get_checkpoint_service",
+        lambda: CheckpointStub(),
+    )
+    monkeypatch.setattr(research_router, "get_research_service_v2", lambda: ServiceStub())
+
+    app = FastAPI()
+    app.include_router(research_router.router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/research/continue/s",
+        json={"approved_outline": [{"id": "sec_1", "title": "New"}]},
+    )
+
+    assert response.status_code == 409
+    assert "Outline approval is not pending" in response.text
+
+
 def test_router_continue_invalid_outline_returns_400_before_stream(monkeypatch):
     research_router = import_research_router()
     state = create_initial_state(query="q", session_id="s")
@@ -359,7 +489,7 @@ def test_router_continue_invalid_outline_returns_400_before_stream(monkeypatch):
         def __init__(self):
             self.graph = graph
 
-        async def continue_research(self, session_id, approved_outline, user_id=None):
+        async def continue_research(self, session_id, approved_outline, user_id=None, prepared_state=None):
             raise AssertionError("stream must not start for invalid outline")
             yield "data: [DONE]\n\n"
 
@@ -398,7 +528,7 @@ def test_router_continue_not_pending_state_returns_409_before_stream(monkeypatch
         def __init__(self):
             self.graph = graph
 
-        async def continue_research(self, session_id, approved_outline, user_id=None):
+        async def continue_research(self, session_id, approved_outline, user_id=None, prepared_state=None):
             raise AssertionError("stream must not start when approval is not pending")
             yield "data: [DONE]\n\n"
 

@@ -141,14 +141,19 @@ class DeepResearchV2Service:
         session_id: str,
         approved_outline: list[dict],
         user_id: Optional[str] = None,
+        prepared_state: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """Continue a paused research run after outline approval."""
         try:
-            async for event in self.graph.continue_with_approved_outline(
-                session_id=session_id,
-                approved_outline=approved_outline,
-                user_id=user_id,
-            ):
+            if prepared_state is not None:
+                event_stream = self.graph.continue_prepared_outline(prepared_state)
+            else:
+                event_stream = self.graph.continue_with_approved_outline(
+                    session_id=session_id,
+                    approved_outline=approved_outline,
+                    user_id=user_id,
+                )
+            async for event in event_stream:
                 yield self._format_sse(event)
         except Exception as e:
             logger.error(f"Continue research error: {e}", exc_info=True)

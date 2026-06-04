@@ -281,7 +281,7 @@ async def continue_research(session_id: str, request: ContinueResearchRequest):
             )
 
         service_v2 = get_research_service_v2()
-        service_v2.graph.preflight_continue_with_approved_outline(
+        prepared_state = service_v2.graph.prepare_continue_with_approved_outline(
             session_id=session_id,
             approved_outline=request.approved_outline,
         )
@@ -291,6 +291,7 @@ async def continue_research(session_id: str, request: ContinueResearchRequest):
                 async for event in service_v2.continue_research(
                     session_id=session_id,
                     approved_outline=request.approved_outline,
+                    prepared_state=prepared_state,
                 ):
                     yield event
             except ValueError as e:
