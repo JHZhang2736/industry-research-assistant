@@ -549,3 +549,34 @@ def test_router_continue_not_pending_state_returns_409_before_stream(monkeypatch
 
     assert response.status_code == 409
     assert "Outline approval is not pending" in response.text
+
+
+def test_router_resume_rejects_paused_outline_approval(monkeypatch):
+    research_router = import_research_router()
+
+    class CheckpointStub:
+        def get_checkpoint_info(self, session_id):
+            return {
+                "status": "paused",
+                "query": "q",
+            }
+
+    class ServiceStub:
+        async def research(self, *args, **kwargs):
+            raise AssertionError("paused approval checkpoints must not resume the graph")
+            yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(
+        "service.checkpoint_service.get_checkpoint_service",
+        lambda: CheckpointStub(),
+    )
+    monkeypatch.setattr(research_router, "get_research_service_v2", lambda: ServiceStub())
+
+    app = FastAPI()
+    app.include_router(research_router.router)
+    client = TestClient(app)
+
+    response = client.post("/research/resume/s")
+
+    assert response.status_code == 409
+    assert "outline approval" in response.text

@@ -443,6 +443,12 @@ async def resume_research(session_id: str):
                 detail="No checkpoint found for this session"
             )
 
+        if info.get("status") == "paused":
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail="Research is waiting for outline approval; use the continue endpoint"
+            )
+
         if info.get("status") == "completed":
             raise HTTPException(
                 status_code=HTTP_400_BAD_REQUEST,

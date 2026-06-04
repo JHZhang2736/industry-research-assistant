@@ -70,6 +70,34 @@ async def test_scope_topic_returns_warning_on_search_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scope_topic_skips_web_search_when_web_disabled(monkeypatch):
+    scout = DeepScout(
+        llm_api_key="dummy",
+        llm_base_url="http://dummy",
+        search_api_key="dummy",
+        model="qwen-plus",
+    )
+
+    web_calls = []
+
+    async def fake_execute_search(*args, **kwargs):
+        web_calls.append((args, kwargs))
+        return []
+
+    monkeypatch.setattr(scout, "_execute_search", fake_execute_search)
+
+    state = create_initial_state("private local query", "sid_1", search_web=False)
+    state["search_local"] = False
+    summary = await scout.scope_topic(state, "private local query", count=2, max_queries=2)
+
+    assert web_calls == []
+    assert summary["queries"] == ["private local query", "private local query latest report"]
+    assert summary["initial_sources"] == []
+    assert "disabled" in summary["warning"]
+    assert state["facts"] == []
+
+
+@pytest.mark.asyncio
 async def test_scope_topic_filters_prompt_injection_results(monkeypatch):
     scout = DeepScout(
         llm_api_key="dummy",

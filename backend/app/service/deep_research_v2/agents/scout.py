@@ -346,15 +346,29 @@ URL: {url}
             "warning": "",
         }
 
+        search_web = state.get("search_web", True)
+        search_local = state.get("search_local", False)
+        if not search_web and not search_local:
+            summary["queries"] = planned_queries
+            summary["warning"] = "scoping skipped because search is disabled"
+            return summary
+
         all_results: List[Dict[str, Any]] = []
         try:
             for scope_query in planned_queries:
                 summary["queries"].append(scope_query)
-                results = await self._execute_search(scope_query, count=count)
+                results: List[Dict[str, Any]] = []
+                if search_web:
+                    results.extend(await self._execute_search(scope_query, count=count))
+                if search_local:
+                    results.extend(await self._execute_local_search(scope_query, top_k=count))
                 all_results.extend(results[:count])
         except Exception as e:
             summary["warning"] = str(e)
             return summary
+
+        if not search_web and search_local and not all_results:
+            summary["warning"] = "local scoping returned no results"
 
         guarded = guard_results(
             all_results,
