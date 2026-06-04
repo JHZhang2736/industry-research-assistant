@@ -13,6 +13,7 @@ DeepResearch V2.0 - 深度侦探 Agent (DeepScout)
 import uuid
 import asyncio
 import hashlib
+import re
 import requests
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -81,6 +82,26 @@ def _ensure_str(value: Any) -> str:
     return str(value)
 
 
+def _tokenize_scope_text(text: str) -> List[str]:
+    stopwords = {
+        "and", "or", "the", "a", "an", "of", "for", "to", "in", "on", "with",
+        "by", "from", "is", "are", "was", "were", "market", "report",
+        "analysis", "industry", "research", "2024", "2025", "2026",
+    }
+    terms = []
+    value = (text or "").lower()
+    for raw in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9][a-z0-9_-]*", value):
+        term = raw.strip("-_")
+        if len(term) < 3 or term in stopwords:
+            continue
+        if term.isdigit():
+            continue
+        if re.search(r"[\u4e00-\u9fff]", term):
+            terms.extend(term[i:i + 8] for i in range(0, len(term), 8))
+        else:
+            terms.append(term)
+    return terms
+  
 def interleave_unique(result_lists, cap: int = 50):
     """跨多个 query 的结果列表做轮转(round-robin) + URL 去重 + 截断到 cap。
 
@@ -337,6 +358,110 @@ URL: {url}
         self._emit_search_results_event(state)
 
         return state
+
+    async def scope_topic(
+        self,
+        state: ResearchState,
+        query: str,
+        *,
+        count: int = 3,
+        max_queries: int = 3,
+    ) -> Dict[str, Any]:
+        """Run one shallow search pass for Planner context only.
+
+        This method intentionally does not ingest facts, read URLs, analyze
+        results with an LLM, or recurse into follow-up searches.
+        """
+        base_query = (query or state.get("query", "") or "").strip()
+        planned_queries = [base_query] if base_query else []
+        research_type = state.get("research_type", "")
+        if research_type and research_type != "general" and base_query:
+            planned_queries.append(f"{base_query} {research_type}")
+        if base_query:
+            planned_queries.append(f"{base_query} latest report")
+        planned_queries = planned_queries[:max_queries]
+
+        summary = {
+            "queries": [],
+            "key_subdomains": [],
+            "initial_sources": [],
+            "hot_terms": [],
+            "source_notes": [],
+            "warning": "",
+        }
+
+        search_web = state.get("search_web", True)
+        search_local = state.get("search_local", False)
+        if not search_web and not search_local:
+            summary["queries"] = planned_queries
+            summary["warning"] = "scoping skipped because search is disabled"
+            return summary
+
+        all_results: List[Dict[str, Any]] = []
+        try:
+            for scope_query in planned_queries:
+                summary["queries"].append(scope_query)
+                if search_web:
+                    web_results = await self._execute_search(scope_query, count=count)
+                    all_results.extend(web_results[:count])
+                if search_local:
+                    local_results = await self._execute_local_search(scope_query, top_k=count)
+                    all_results.extend(local_results[:count])
+        except Exception as e:
+            summary["warning"] = str(e)
+            return summary
+
+        if not search_web and search_local and not all_results:
+            summary["warning"] = "local scoping returned no results"
+
+        guarded = guard_results(
+            all_results,
+            text_of=lambda r: (
+                f"{r.get('title', '')}\n"
+                f"{r.get('site_name', '')}\n"
+                f"{r.get('summary', '')}\n"
+                f"{r.get('snippet', '')}"
+            ),
+        )
+        for dropped, verdict in guarded.dropped:
+            self.logger.warning(
+                f"[InjectionGuard] scoping search discarded {dropped.get('url', '')}: "
+                f"{verdict.matched_patterns}"
+            )
+
+        seen_urls = set()
+        term_counts: Dict[str, int] = {}
+        site_counts: Dict[str, int] = {}
+        for result in guarded.kept:
+            url = _ensure_str(result.get("url"))
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            title = _ensure_str(result.get("title"))
+            site_name = _ensure_str(result.get("site_name"))
+            snippet = _ensure_str(result.get("summary") or result.get("snippet"))
+            if site_name:
+                site_counts[site_name] = site_counts.get(site_name, 0) + 1
+            for term in _tokenize_scope_text(f"{title} {snippet}"):
+                term_counts[term] = term_counts.get(term, 0) + 1
+            summary["initial_sources"].append({
+                "title": title[:120],
+                "url": url,
+                "site_name": site_name,
+                "date": _ensure_str(result.get("date")),
+                "snippet": snippet[:240],
+            })
+
+        summary["hot_terms"] = [
+            term for term, _ in sorted(term_counts.items(), key=lambda item: (-item[1], item[0]))[:12]
+        ]
+        summary["key_subdomains"] = summary["hot_terms"][:6]
+        summary["source_notes"] = [
+            f"{site}: {n} result(s)"
+            for site, n in sorted(site_counts.items(), key=lambda item: (-item[1], item[0]))[:6]
+        ]
+        return summary
 
     async def _supplementary_research(self, state: ResearchState) -> ResearchState:
         """
@@ -1216,7 +1341,7 @@ URL: {url}
     async def _execute_search(self, query: str, count: int = 10) -> List[Dict]:
         """执行网络搜索 - 使用 Bocha Web Search API"""
         # 检查缓存
-        cache_key = hashlib.md5(query.encode()).hexdigest()
+        cache_key = hashlib.md5(f"{query}|count={count}".encode()).hexdigest()
         if cache_key in self.search_cache:
             self.logger.debug(f"Cache hit for query: {query[:30]}...")
             return self.search_cache[cache_key]

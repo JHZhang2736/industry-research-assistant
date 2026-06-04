@@ -356,3 +356,157 @@
   padding: 60px 20px;
   color: #c4c4c4;
 }
+
+.approvalBody {
+  flex: 1;
+  overflow: auto;
+  padding: 20px 24px 28px;
+  background: #fff;
+}
+
+.approvalSection {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+}
+
+.approvalEyebrow {
+  font-size: 12px;
+  color: #666;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.scopeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.scopeLabel {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+
+.tagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 12px;
+  color: #333;
+  background: #fafafa;
+}
+
+.sourceList {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.sourceItem {
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.sourceTitle {
+  font-size: 13px;
+  color: #222;
+  line-height: 1.4;
+}
+
+.sourceMeta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #888;
+}
+
+.outlineEditor {
+  display: grid;
+  gap: 12px;
+}
+
+.outlineItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.outlineNumber {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #1a1a1a;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.outlineFields {
+  display: grid;
+  gap: 8px;
+}
+
+.outlineInput,
+.outlineTextarea {
+  width: 100%;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-size: 13px;
+  color: #222;
+  outline: none;
+
+  &:focus {
+    border-color: #1a1a1a;
+  }
+}
+
+.outlineTextarea {
+  min-height: 64px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.approvalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.secondaryAction,
+.primaryAction {
+  border: none;
+  border-radius: 6px;
+  height: 34px;
+  padding: 0 14px;
+  font-size: 13px;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+.secondaryAction {
+  background: #f2f2f2;
+  color: #444;
+}
+
+.primaryAction {
+  background: #1a1a1a;
+  color: #fff;
+}

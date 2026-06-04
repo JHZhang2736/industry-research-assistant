@@ -31,6 +31,7 @@ class CheckpointService:
         user_id: Optional[str] = None,
         ui_state: Optional[Dict[str, Any]] = None,
         final_report: Optional[str] = None,
+        status: str = "running",
     ) -> Optional[str]:
         """
         保存检查点
@@ -70,7 +71,7 @@ class CheckpointService:
                     existing.ui_state_json = clean_ui_state
                 if final_report:
                     existing.final_report = final_report
-                existing.status = "running"
+                existing.status = status
                 existing.updated_at = datetime.utcnow()
                 checkpoint_id = str(existing.id)
             else:
@@ -84,7 +85,7 @@ class CheckpointService:
                     state_json=clean_state,
                     ui_state_json=clean_ui_state,
                     final_report=final_report,
-                    status="running",
+                    status=status,
                 )
                 db.add(checkpoint)
                 db.flush()
@@ -104,6 +105,36 @@ class CheckpointService:
             logger.error(f"Failed to save checkpoint: {e}")
             db.rollback()
             return None
+        finally:
+            db.close()
+
+    def claim_paused_checkpoint(self, session_id: str) -> bool:
+        """
+        Atomically claim a paused checkpoint for continuation.
+
+        Returns True only for the caller that transitions the checkpoint from
+        paused to running. Concurrent callers that arrive after the transition
+        get False and should not start executor work.
+        """
+        db = self._get_db()
+        try:
+            updated = db.query(ResearchCheckpoint).filter(
+                ResearchCheckpoint.session_id == session_id,
+                ResearchCheckpoint.status == "paused",
+            ).update(
+                {
+                    ResearchCheckpoint.status: "running",
+                    ResearchCheckpoint.updated_at: datetime.utcnow(),
+                },
+                synchronize_session=False,
+            )
+            db.commit()
+            return updated > 0
+
+        except Exception as e:
+            logger.error(f"Failed to claim paused checkpoint: {e}")
+            db.rollback()
+            return False
         finally:
             db.close()
 

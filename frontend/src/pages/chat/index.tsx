@@ -36,6 +36,13 @@ async function scrollToBottom() {
   }
 }
 
+type OutlineApprovalEvent = {
+  type: 'outline_approval_required'
+  session_id: string
+  outline: Array<{ id: string; title: string; description?: string }>
+  scoping_summary?: any
+}
+
 export default function Index() {
   const { id } = useParams()
   const { data: ctx } = usePageTransport(transportToChatEnter)
@@ -579,6 +586,44 @@ export default function Index() {
             }
 
             // V2 研究完成事件
+            if (json.type === 'outline_approval_required') {
+              const approval = json as OutlineApprovalEvent
+              target.loading = false
+              const stepType = 'approval' as ResearchStep['type']
+              const step: ResearchStep = {
+                id: stepType,
+                type: stepType,
+                title: '确认研究大纲',
+                subtitle: '编辑章节标题和描述后开始研究',
+                status: 'running',
+                stats: { sectionsCount: approval.outline.length },
+              }
+              setResearchSteps(prev => {
+                const existing = prev.find(s => s.type === stepType)
+                const next = existing
+                  ? prev.map(s => s.type === stepType ? step : s)
+                  : [...prev, step]
+                researchStepsRef.current = next
+                return next
+              })
+
+              const detail: ResearchDetailData = {
+                stepId: stepType,
+                stepType,
+                title: '确认研究大纲',
+                subtitle: '编辑章节标题和描述后开始研究',
+                searchResults: [],
+                charts: [],
+                scopingSummary: approval.scoping_summary,
+                outlineDraft: approval.outline,
+                approvalStatus: 'pending',
+              }
+              researchDetailsRef.current.set(stepType, detail)
+              setSelectedResearchDetail({ ...detail })
+              setResearchDataVersion(v => v + 1)
+              return
+            }
+
             if (json.type === 'research_complete') {
               console.log('研究完成事件:', json)
               // 设置最终报告为内容
@@ -1078,6 +1123,275 @@ export default function Index() {
     [chat],
   )
 
+  const continueApprovedOutline = useCallback(async (
+    outline: Array<{ id: string; title: string; description?: string }>,
+  ) => {
+    if (!id || !currentChatItem) return
+
+    const target = currentChatItem
+    target.loading = true
+
+    try {
+      const res = await api.session.continueResearch(id, { approved_outline: outline })
+      const reader = res.data.getReader()
+      if (!reader) return
+
+      currentSessionIdRef.current = id
+      readerRef.current = reader
+
+      const decoder = new TextDecoder('utf-8')
+      let temp = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        temp += decoder.decode(value)
+
+        while (true) {
+          const index = temp.indexOf('\n')
+          if (index === -1) break
+
+          const slice = temp.slice(0, index)
+          temp = temp.slice(index + 1)
+          if (!slice.startsWith('data: ')) continue
+
+          const str = slice.trim().replace(/^data\: /, '').trim()
+          if (!str || str === '[DONE]') continue
+
+          const json = JSON.parse(str)
+
+          if (json.type === 'outline_approved') {
+            setResearchSteps(prev => {
+              const next = prev.map(s =>
+                s.type === 'approval' ? { ...s, status: 'completed' as const } : s,
+              )
+              researchStepsRef.current = next
+              return next
+            })
+            const detail = researchDetailsRef.current.get('approval')
+            if (detail) {
+              detail.approvalStatus = 'approved'
+              setSelectedResearchDetail({ ...detail })
+            }
+            setResearchDataVersion(v => v + 1)
+            continue
+          }
+
+          if (json.type === 'research_step') {
+            const content = json.content || json
+            const stepType = content.step_type as ResearchStep['type']
+            const rawStats = content.stats || {}
+            const stats = {
+              resultsCount: rawStats.results_count,
+              chartsCount: rawStats.charts_count,
+              entitiesCount: rawStats.entities_count,
+              sectionsCount: rawStats.sections_count,
+              wordCount: rawStats.word_count,
+              questionsCount: rawStats.questions_count,
+              sourcesCount: rawStats.sources_count,
+              referencesCount: rawStats.references_count,
+            }
+
+            setResearchSteps(prev => {
+              const existing = prev.find(s => s.type === stepType)
+              const next = existing
+                ? prev.map(s => s.type === stepType ? {
+                  ...s,
+                  status: content.status || s.status,
+                  stats,
+                } : s)
+                : [...prev, {
+                  id: stepType,
+                  type: stepType,
+                  title: content.title || stepType,
+                  subtitle: content.subtitle || '',
+                  status: content.status || 'running',
+                  stats,
+                }]
+              researchStepsRef.current = next
+              return next
+            })
+
+            if (!researchDetailsRef.current.has(stepType)) {
+              researchDetailsRef.current.set(stepType, {
+                stepId: stepType,
+                stepType,
+                title: content.title || stepType,
+                subtitle: content.subtitle,
+                searchResults: [],
+                charts: [],
+              })
+            }
+            setResearchDataVersion(v => v + 1)
+            continue
+          }
+
+          if (json.type === 'phase') {
+            const phaseToStepType: Record<string, ResearchStep['type']> = {
+              executing: 'searching',
+              reviewing: 'reviewing',
+              replanning: 'revising',
+            }
+            const stepType = phaseToStepType[json.phase]
+            if (stepType && !researchStepsRef.current.find(s => s.type === stepType)) {
+              const step: ResearchStep = {
+                id: stepType,
+                type: stepType,
+                title: String(json.phase || stepType),
+                subtitle: String(json.content || ''),
+                status: 'running',
+              }
+              const next = [...researchStepsRef.current, step]
+              researchStepsRef.current = next
+              setResearchSteps(next)
+              researchDetailsRef.current.set(stepType, {
+                stepId: stepType,
+                stepType,
+                title: String(json.phase || stepType),
+                subtitle: String(json.content || ''),
+                searchResults: [],
+                charts: [],
+              })
+              setResearchDataVersion(v => v + 1)
+            }
+            continue
+          }
+
+          if (json.type === 'search_results') {
+            const content = json.content || json
+            const results = content.results || []
+            const stepType = 'searching' as ResearchStep['type']
+            let detail = researchDetailsRef.current.get(stepType)
+            if (!detail) {
+              detail = {
+                stepId: stepType,
+                stepType,
+                title: 'searching',
+                searchResults: [],
+                charts: [],
+              }
+              researchDetailsRef.current.set(stepType, detail)
+            }
+            const newResults = results.map((r: any, index: number) => ({
+              id: r.id || `sr_${Date.now()}_${index}`,
+              title: r.title,
+              source: r.source,
+              date: r.date,
+              url: r.url,
+              snippet: r.snippet,
+            }))
+            detail.searchResults = content.isIncremental
+              ? [...(detail.searchResults || []), ...newResults]
+              : newResults
+            setSelectedResearchDetail({ ...detail })
+            setResearchDataVersion(v => v + 1)
+            continue
+          }
+
+          if (json.type === 'charts') {
+            const content = json.content || json
+            const stepType = 'analyzing' as ResearchStep['type']
+            const detail = researchDetailsRef.current.get(stepType)
+            if (detail) {
+              detail.charts = content.charts || []
+              setSelectedResearchDetail({ ...detail })
+              setResearchDataVersion(v => v + 1)
+            }
+            continue
+          }
+
+          if (json.type === 'section_content') {
+            const content = json.content || json
+            const stepType = 'writing' as ResearchStep['type']
+            let detail = researchDetailsRef.current.get(stepType)
+            if (!detail) {
+              detail = {
+                stepId: stepType,
+                stepType,
+                title: 'writing',
+                streamingReport: '',
+                searchResults: [],
+                charts: [],
+                sections: [],
+              }
+              researchDetailsRef.current.set(stepType, detail)
+            }
+            const sectionId = content.section_id || `section_${Date.now()}`
+            const sectionTitle = content.title || content.section_title || 'Section'
+            const sectionContent = content.content || ''
+            if (!detail.sections) detail.sections = []
+            const existingIndex = detail.sections.findIndex(section => section.id === sectionId)
+            const sectionDraft = {
+              id: sectionId,
+              title: sectionTitle,
+              content: sectionContent,
+              wordCount: sectionContent.length,
+            }
+            if (existingIndex >= 0) {
+              detail.sections[existingIndex] = sectionDraft
+            } else {
+              detail.sections.push(sectionDraft)
+            }
+            detail.streamingReport = detail.sections
+              .map(section => `## ${section.title}\n\n${section.content}`)
+              .join('\n\n')
+            setSelectedResearchDetail({ ...detail })
+            setResearchDataVersion(v => v + 1)
+            continue
+          }
+
+          if (json.type === 'report_draft') {
+            const content = json.content || json
+            const reportContent = typeof content === 'string' ? content : content.content || ''
+            const stepType = 'writing' as ResearchStep['type']
+            const detail = researchDetailsRef.current.get(stepType)
+            if (detail && reportContent) {
+              detail.streamingReport = reportContent
+              target.content = reportContent
+              setSelectedResearchDetail({ ...detail })
+              setResearchDataVersion(v => v + 1)
+            }
+            continue
+          }
+
+          if (json.type === 'research_complete') {
+            const finalReport = json.final_report || ''
+            if (finalReport) {
+              target.content = finalReport
+              const stepType = (researchDetailsRef.current.has('writing') ? 'writing' : 'generating') as ResearchStep['type']
+              const detail = researchDetailsRef.current.get(stepType)
+              if (detail) {
+                detail.streamingReport = finalReport
+                setSelectedResearchDetail({ ...detail })
+              }
+            }
+            if (json.references && json.references.length > 0) {
+              target.reference = json.references.map((ref: any, index: number) => ({
+                id: index + 1,
+                title: ref.title || ref.source_name || '来源',
+                link: ref.url || ref.source_url || '',
+                content: ref.content || ref.summary || '',
+                source: ref.source_type === 'local' ? 'knowledge' : 'web',
+              }))
+            }
+            setResearchSteps(prev => {
+              const next = prev.map(s => ({ ...s, status: 'completed' as const }))
+              researchStepsRef.current = next
+              return next
+            })
+            setResearchDataVersion(v => v + 1)
+          }
+        }
+
+        if (done) break
+      }
+    } catch (error: any) {
+      message.error(error?.message || '继续研究失败')
+    } finally {
+      target.loading = false
+      readerRef.current = null
+    }
+  }, [currentChatItem, id])
+
   const send = useCallback(
     async (message: string, attachmentIds?: string[]) => {
       if (loadingRef.current) return
@@ -1289,6 +1603,18 @@ export default function Index() {
               }))
             }
 
+            if (checkpoint.status === 'paused' && stateJson?.outline_approval_status === 'pending') {
+              const approvalStep: ResearchStep = {
+                id: 'approval',
+                type: 'approval',
+                title: '确认研究大纲',
+                subtitle: '编辑章节标题和描述后开始研究',
+                status: 'running',
+                stats: { sectionsCount: (stateJson.outline || []).length },
+              }
+              steps = [...steps.filter(step => step.type !== 'approval'), approvalStep]
+            }
+
             setResearchSteps(steps)
             researchStepsRef.current = steps
 
@@ -1304,6 +1630,22 @@ export default function Index() {
               researchDetailsRef.current.set(step.type, detail)  // 使用 type 作为 key
             })
             console.log('[恢复状态] 已创建步骤详情:', researchDetailsRef.current.size, '个')
+
+            if (checkpoint.status === 'paused' && stateJson?.outline_approval_status === 'pending') {
+              const approvalDetail: ResearchDetailData = {
+                stepId: 'approval',
+                stepType: 'approval',
+                title: '确认研究大纲',
+                subtitle: '编辑章节标题和描述后开始研究',
+                searchResults: [],
+                charts: [],
+                scopingSummary: stateJson.scoping_summary,
+                outlineDraft: stateJson.outline || [],
+                approvalStatus: 'pending',
+              }
+              researchDetailsRef.current.set('approval', approvalDetail)
+              setSelectedResearchDetail({ ...approvalDetail })
+            }
 
             if (uiState) {
 
@@ -1576,6 +1918,9 @@ export default function Index() {
       charts: allCharts,
       streamingReport,
       sections: allSections,
+      scopingSummary: selectedResearchDetail?.scopingSummary,
+      outlineDraft: selectedResearchDetail?.outlineDraft,
+      approvalStatus: selectedResearchDetail?.approvalStatus,
     }
 
     return aggregated
@@ -1591,6 +1936,7 @@ export default function Index() {
           steps={researchSteps}
           onStepClick={handleResearchStepClick}
           onClose={() => setSelectedResearchDetail(null)}
+          onApproveOutline={continueApprovedOutline}
         />
       )
     }
@@ -1607,7 +1953,7 @@ export default function Index() {
       )
     }
     return null
-  }, [currentChatItem, selectedStepDetail, isDeepResearchMode, aggregatedResearchData, researchSteps, handleResearchStepClick])
+  }, [currentChatItem, selectedStepDetail, isDeepResearchMode, aggregatedResearchData, researchSteps, handleResearchStepClick, continueApprovedOutline])
 
   return (
     <ComPageLayout

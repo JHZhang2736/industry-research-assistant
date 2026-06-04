@@ -4,7 +4,12 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from starlette.status import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import (
+    HTTP_200_OK,
+    HTTP_400_BAD_REQUEST,
+    HTTP_409_CONFLICT,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
 import logging
 
 from service.sse_utils import serialize_event
@@ -52,6 +57,10 @@ class ResearchRequest(BaseModel):
         if self.search_modes is not None:
             return 'local' in self.search_modes
         return self.search_local if self.search_local is not None else False
+
+
+class ContinueResearchRequest(BaseModel):
+    approved_outline: list[dict]
 
 
 _research_service_v2: DeepResearchV2Service = None
@@ -251,6 +260,66 @@ def clear_cancel_flag(session_id: str):
     cache.delete(cancel_key)
 
 
+@router.post("/continue/{session_id}", status_code=HTTP_200_OK)
+async def continue_research(session_id: str, request: ContinueResearchRequest):
+    """Continue a paused research run after the user approves the outline."""
+    try:
+        from service.checkpoint_service import get_checkpoint_service
+
+        checkpoint_service = get_checkpoint_service()
+        info = checkpoint_service.get_checkpoint_info(session_id)
+        if not info:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail="No checkpoint found for this session",
+            )
+
+        if info.get("status") != "paused":
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail="Research is not waiting for outline approval",
+            )
+
+        service_v2 = get_research_service_v2()
+        prepared_state = service_v2.graph.prepare_continue_with_approved_outline(
+            session_id=session_id,
+            approved_outline=request.approved_outline,
+        )
+
+        async def generate_sse():
+            try:
+                async for event in service_v2.continue_research(
+                    session_id=session_id,
+                    approved_outline=request.approved_outline,
+                    prepared_state=prepared_state,
+                ):
+                    yield event
+            except ValueError as e:
+                logger.error(f"Continue research value error: {e}")
+                error_event = serialize_event({"type": "error", "content": str(e)})
+                yield f"data: {error_event}\n\n"
+            except RuntimeError as e:
+                logger.error(f"Continue research runtime error: {e}")
+                error_event = serialize_event({"type": "error", "content": str(e)})
+                yield f"data: {error_event}\n\n"
+            except Exception as e:
+                logger.error(f"Continue research error: {e}")
+                error_event = serialize_event({"type": "error", "content": str(e)})
+                yield f"data: {error_event}\n\n"
+
+        return StreamingResponse(generate_sse(), media_type="text/event-stream")
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to continue research: {e}")
+        raise HTTPException(status_code=HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
 # ============ 检查点 API ============
 
 @router.get("/checkpoint/{session_id}", status_code=HTTP_200_OK)
@@ -372,6 +441,12 @@ async def resume_research(session_id: str):
             raise HTTPException(
                 status_code=HTTP_400_BAD_REQUEST,
                 detail="No checkpoint found for this session"
+            )
+
+        if info.get("status") == "paused":
+            raise HTTPException(
+                status_code=HTTP_409_CONFLICT,
+                detail="Research is waiting for outline approval; use the continue endpoint"
             )
 
         if info.get("status") == "completed":

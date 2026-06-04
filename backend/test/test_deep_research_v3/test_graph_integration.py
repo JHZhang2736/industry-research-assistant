@@ -32,6 +32,97 @@ def test_graph_compiled_has_4_main_nodes(graph):
     assert "replanner" in inner_names
 
 
+def test_graph_compiled_has_scoping_before_planner(graph):
+    subgraph = graph._build_deep_research_subgraph()
+    inner = subgraph.get_graph()
+    inner_names = set(inner.nodes.keys())
+    assert "scoping" in inner_names
+
+
+@pytest.mark.asyncio
+async def test_scoping_node_returns_summary(graph, monkeypatch):
+    state = create_initial_state(query="energy storage", session_id="s")
+    state["research_type"] = "industry_analysis"
+
+    async def fake_scope_topic(state, query, count=3, max_queries=3):
+        return {"queries": [query], "key_subdomains": ["grid"], "initial_sources": []}
+
+    monkeypatch.setattr(graph.scout, "scope_topic", fake_scope_topic)
+
+    result = await graph._scoping_node(state)
+
+    assert result["scoping_summary"]["key_subdomains"] == ["grid"]
+
+
+def test_checkpoint_event_includes_scoping_stats(graph, monkeypatch):
+    state = create_initial_state(query="energy storage", session_id="s")
+    state["scoping_summary"] = {
+        "initial_sources": [{"title": "A"}, {"title": "B"}],
+        "hot_terms": ["battery", "grid", "lithium"],
+    }
+    ui_state = {
+        "research_steps": [],
+        "search_results": [],
+        "charts": [],
+        "streaming_report": "",
+    }
+
+    graph.checkpoint_service = object()
+    monkeypatch.setattr(graph, "_save_checkpoint", lambda *args, **kwargs: True)
+
+    event = graph._build_checkpoint_event(state, None, ui_state, "scoping")
+
+    assert event["type"] == "checkpoint_saved"
+    assert ui_state["research_steps"][0]["type"] == "scoping"
+    assert ui_state["research_steps"][0]["stats"] == {
+        "sources": 2,
+        "hot_terms": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_pauses_after_planner_when_approval_pending(graph, monkeypatch):
+    state = create_initial_state(query="energy storage", session_id="s")
+    state["intent"] = "deep_research"
+    state["research_type"] = "industry_analysis"
+    state["scoping_summary"] = {"key_subdomains": ["grid"]}
+
+    async def fake_astream(*args, **kwargs):
+        yield ((), "updates", {
+            "planner": {
+                "outline": [{"id": "sec_1", "title": "Demand", "description": "D"}],
+                "plan": [{
+                    "step_id": "step_search_sec_1",
+                    "tool": "search_section",
+                    "args": {"section_id": "sec_1", "queries": ["Demand"]},
+                    "depends_on": [],
+                    "parallel_group": "search_batch",
+                }],
+            }
+        })
+        raise AssertionError("executor must not run after approval pause")
+
+    saved = {}
+
+    def fake_save_checkpoint(state, user_id=None, ui_state=None, status=None):
+        saved["state"] = dict(state)
+        saved["status"] = status
+        return True
+
+    monkeypatch.setattr(graph.graph, "astream", fake_astream)
+    monkeypatch.setattr(graph, "_save_checkpoint", fake_save_checkpoint)
+
+    events = [event async for event in graph._run_with_langgraph(state)]
+
+    approval_events = [
+        e for e in events if e.get("type") == "outline_approval_required"
+    ]
+    assert approval_events
+    assert approval_events[0]["outline"][0]["title"] == "Demand"
+    assert approval_events[0]["scoping_summary"] == {"key_subdomains": ["grid"]}
+    assert saved["status"] == "paused"
+
+
 def test_route_after_critic_pass_returns_end():
     """verdict=pass + 高分 → END"""
     from app.service.deep_research_v2.graph import route_after_critic
