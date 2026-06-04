@@ -25,6 +25,10 @@ async def test_analyze_search_results_drops_injection_and_adds_preamble(scout, m
         return json.dumps({"extracted_facts": []})
 
     monkeypatch.setattr(scout, "call_llm", AsyncMock(side_effect=fake_call_llm))
+    monkeypatch.setattr(
+        scout, "_rerank",
+        AsyncMock(side_effect=lambda query, results, **kw: results),
+    )
 
     results = [
         {"title": "AI 市场", "url": "http://ok", "site_name": "艾瑞",
@@ -55,6 +59,10 @@ async def test_deep_search_results_guarded(scout, monkeypatch):
         return json.dumps({"extracted_facts": []})
 
     monkeypatch.setattr(scout, "call_llm", AsyncMock(side_effect=fake))
+    monkeypatch.setattr(
+        scout, "_rerank",
+        AsyncMock(side_effect=lambda query, results, **kw: results),
+    )
 
     results = [
         {"title": "正常", "site_name": "央视", "summary": "新能源车销量增长 30%"},
