@@ -26,6 +26,27 @@ export interface ChartConfig {
   image_base64?: string  // matplotlib 生成的 base64 图片
 }
 
+export interface ScopingSummary {
+  queries?: string[]
+  key_subdomains?: string[]
+  initial_sources?: Array<{
+    title?: string
+    url?: string
+    site_name?: string
+    date?: string
+    snippet?: string
+  }>
+  hot_terms?: string[]
+  source_notes?: string[]
+  warning?: string
+}
+
+export interface OutlineDraftSection {
+  id: string
+  title: string
+  description?: string
+}
+
 export interface ResearchDetailData {
   stepId: string
   stepType: string
@@ -35,11 +56,14 @@ export interface ResearchDetailData {
   charts?: ChartConfig[]
   streamingReport?: string  // 最终报告
   sections?: SectionDraft[]  // 章节草稿
+  scopingSummary?: ScopingSummary
+  outlineDraft?: OutlineDraftSection[]
+  approvalStatus?: 'pending' | 'approved'
 }
 
 export interface ResearchStep {
   id: string
-  type: 'planning' | 'searching' | 'analyzing' | 'generating' | 'writing' | 'reviewing' | 're_researching' | 'revising'
+  type: 'scoping' | 'planning' | 'approval' | 'searching' | 'analyzing' | 'generating' | 'writing' | 'reviewing' | 're_researching' | 'revising'
   title: string
   subtitle: string
   status: 'pending' | 'running' | 'completed'
@@ -51,11 +75,14 @@ interface ResearchDetailProps {
   steps?: ResearchStep[]
   onStepClick?: (stepId: string) => void
   onClose?: () => void
+  onApproveOutline?: (outline: OutlineDraftSection[]) => void
 }
 
 type TabKey = 'results' | 'charts' | 'report'
 
 const stepLabels: Record<ResearchStep['type'], string> = {
+  scoping: '主题勘察',
+  approval: '确认大纲',
   planning: '研究计划',
   searching: '信息检索',
   analyzing: '数据分析',

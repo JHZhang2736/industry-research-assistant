@@ -144,6 +144,32 @@ export function deepsearch(
 
 // ============ 附件 API ============
 
+export interface ApprovedOutlineSection {
+  id: string
+  title: string
+  description?: string
+}
+
+export interface ContinueResearchParams {
+  approved_outline: ApprovedOutlineSection[]
+}
+
+export function continueResearch(
+  sessionId: string,
+  params: ContinueResearchParams,
+  options?: AxiosRequestConfig,
+) {
+  return request.post<ReadableStream>(`/research/continue/${sessionId}`, params, {
+    headers: {
+      Accept: 'text/event-stream',
+    },
+    responseType: 'stream',
+    adapter: 'fetch',
+    loading: false,
+    ...options,
+  })
+}
+
 export interface Attachment {
   id: string
   session_id: string
