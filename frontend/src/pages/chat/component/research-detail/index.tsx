@@ -1,7 +1,7 @@
 
 
 import { FileTextOutlined, BarChartOutlined, CheckOutlined, LoadingOutlined, FileMarkdownOutlined } from '@ant-design/icons'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import classNames from 'classnames'
 import SearchResults from './search-results'
 import Visualization from './visualization'
@@ -93,8 +93,13 @@ const stepLabels: Record<ResearchStep['type'], string> = {
   revising: '内容修订',
 }
 
-export default function ResearchDetail({ data, steps = [], onStepClick, onClose }: ResearchDetailProps) {
+export default function ResearchDetail({ data, steps = [], onStepClick, onClose, onApproveOutline }: ResearchDetailProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('results')
+  const [outlineDraft, setOutlineDraft] = useState<OutlineDraftSection[]>(data?.outlineDraft || [])
+
+  useEffect(() => {
+    setOutlineDraft(data?.outlineDraft || [])
+  }, [data?.outlineDraft])
 
   console.log(`[ResearchDetail] 渲染，data=${data ? 'exists' : 'null'}, steps=${steps.length}`)
   if (data) {
@@ -140,6 +145,8 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
     },
   ]
 
+  const isApproval = data?.approvalStatus === 'pending' && data?.outlineDraft
+
   return (
     <div className={styles.panel}>
       {/* 研究进度步骤条 */}
@@ -173,6 +180,90 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
       )}
 
       {/* Tab 切换 */}
+      {isApproval && (
+        <div className={styles.approvalBody}>
+          <div className={styles.approvalSection}>
+            <div className={styles.approvalEyebrow}>Scoping result</div>
+            <div className={styles.scopeGrid}>
+              <div>
+                <div className={styles.scopeLabel}>Key areas</div>
+                <div className={styles.tagList}>
+                  {(data?.scopingSummary?.key_subdomains || []).map(item => (
+                    <span key={item} className={styles.tag}>{item}</span>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <div className={styles.scopeLabel}>Hot terms</div>
+                <div className={styles.tagList}>
+                  {(data?.scopingSummary?.hot_terms || []).slice(0, 12).map(item => (
+                    <span key={item} className={styles.tag}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {(data?.scopingSummary?.initial_sources || []).length > 0 && (
+              <div className={styles.sourceList}>
+                {(data?.scopingSummary?.initial_sources || []).slice(0, 5).map((source, index) => (
+                  <div key={`${source.url || source.title || index}`} className={styles.sourceItem}>
+                    <div className={styles.sourceTitle}>{source.title || 'Untitled source'}</div>
+                    <div className={styles.sourceMeta}>{source.site_name || 'Unknown source'}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className={styles.approvalSection}>
+            <div className={styles.approvalEyebrow}>Research outline</div>
+            <div className={styles.outlineEditor}>
+              {outlineDraft.map((section, index) => (
+                <div key={section.id} className={styles.outlineItem}>
+                  <div className={styles.outlineNumber}>{index + 1}</div>
+                  <div className={styles.outlineFields}>
+                    <input
+                      className={styles.outlineInput}
+                      value={section.title}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setOutlineDraft(prev => prev.map(item =>
+                          item.id === section.id ? { ...item, title: value } : item,
+                        ))
+                      }}
+                    />
+                    <textarea
+                      className={styles.outlineTextarea}
+                      value={section.description || ''}
+                      onChange={(event) => {
+                        const value = event.target.value
+                        setOutlineDraft(prev => prev.map(item =>
+                          item.id === section.id ? { ...item, description: value } : item,
+                        ))
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className={styles.approvalActions}>
+              <button className={styles.secondaryAction} type="button" disabled>
+                Regenerate outline
+              </button>
+              <button
+                className={styles.primaryAction}
+                type="button"
+                onClick={() => onApproveOutline?.(outlineDraft)}
+                disabled={outlineDraft.some(section => !section.title.trim())}
+              >
+                Confirm and start research
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isApproval && (
+        <>
       <div className={styles.tabs}>
         {tabs.map((tab) => (
           <button
@@ -195,6 +286,8 @@ export default function ResearchDetail({ data, steps = [], onStepClick, onClose 
         {activeTab === 'charts' && <Visualization charts={data?.charts} />}
         {activeTab === 'report' && <ProcessReport content={data?.streamingReport} sections={data?.sections} charts={data?.charts} />}
       </div>
+        </>
+      )}
     </div>
   )
 }
