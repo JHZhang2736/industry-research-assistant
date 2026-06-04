@@ -1,9 +1,7 @@
 """测试 ResearchState 新字段 + PlanStep / StepResult dataclass"""
-import pytest
 from app.service.deep_research_v2.state import (
     PlanStep,
     StepResult,
-    ResearchState,
     create_initial_state,
 )
 

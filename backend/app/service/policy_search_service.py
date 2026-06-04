@@ -2,7 +2,7 @@
 
 """基于 Milvus 的政策文档搜索服务"""
 import os
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from pymilvus import (
     connections,
     Collection,

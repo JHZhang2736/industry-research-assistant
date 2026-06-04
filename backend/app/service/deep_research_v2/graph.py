@@ -12,7 +12,7 @@ Plan -> Research -> Analyze -> Write -> Review -> (Revise) -> Complete
 import logging
 import asyncio
 import uuid
-from typing import Dict, Any, List, Literal, AsyncGenerator, Optional
+from typing import Dict, Any, List, AsyncGenerator, Optional
 from datetime import datetime
 
 # 导入取消检查函数
@@ -30,7 +30,7 @@ except (ImportError, SyntaxError):
 
 from langgraph.graph import StateGraph, END
 
-from .state import ResearchState, ResearchPhase, create_initial_state
+from .state import ResearchState, create_initial_state
 
 try:
     from service.intent_service import IntentService
@@ -812,6 +812,20 @@ class DeepResearchGraph:
             "charts": [],
             "streaming_report": "",
         }
+        # 大纲审批是分段执行：审批前的 scoping/planning 步骤及其搜索结果/图表已写入暂停态
+        # checkpoint 的 ui_state。续跑（本方法从 executor 起跑）若不带入这些早期状态，
+        # 刷新页面后右侧步骤条只剩 executor 之后的节点，scoping/planning 会丢失。
+        if self.checkpoint_service and session_id:
+            try:
+                prior = self.checkpoint_service.load_full_checkpoint(session_id)
+                prior_ui = (prior or {}).get("ui_state_json") or {}
+                for key in ("research_steps", "search_results", "charts",
+                            "streaming_report", "sections", "references"):
+                    if prior_ui.get(key):
+                        ui_state[key] = prior_ui[key]
+            except Exception as exc:
+                logger.debug(f"seed ui_state from prior checkpoint failed (non-fatal): {exc}")
+
         last_state: Dict[str, Any] = dict(state)
 
         node_to_phase_info = {
@@ -1232,6 +1246,31 @@ class DeepResearchGraph:
         if new_report:
             ui_state["streaming_report"] = new_report
 
+        # 逐章节草稿：前端"过程报告 > 章节草稿"视图依赖它。
+        # 不持久化的话，刷新页面后这一栏会丢（最终报告未生成时整个 tab 都空）。
+        draft_sections = state.get("draft_sections", {}) or {}
+        if draft_sections:
+            outline = state.get("outline", []) or []
+            titles_by_id = {
+                sec.get("id"): sec.get("title", "")
+                for sec in outline
+                if isinstance(sec, dict) and sec.get("id")
+            }
+            sections_for_ui = []
+            # 按 outline 顺序输出，缺失标题时回退用 section_id
+            ordered_ids = [sec.get("id") for sec in outline if isinstance(sec, dict) and sec.get("id")]
+            for sec_id in ordered_ids + [k for k in draft_sections if k not in titles_by_id]:
+                content = draft_sections.get(sec_id, "")
+                if not content:
+                    continue
+                sections_for_ui.append({
+                    "id": sec_id,
+                    "title": titles_by_id.get(sec_id, sec_id),
+                    "content": content,
+                    "wordCount": len(content),
+                })
+            ui_state["sections"] = sections_for_ui
+
         facts = state.get("facts", [])
         if facts:
             search_results_for_ui = []
@@ -1256,6 +1295,8 @@ class DeepResearchGraph:
 
         # 节点 -> 步骤类型（v3 4-node 主图）
         # executor 内部包含 search/analyze/charts/write，stats 时按内容字段量分支
+        # 仅主链路 4 个节点写入 research_steps；intent_router/research_type_router 等
+        # 路由/静默节点不应进入前端步骤条（否则恢复检查点时会冒出原始节点名）。
         step_type_map = {
             "scoping": "scoping",
             "planner": "planning",
@@ -1263,47 +1304,48 @@ class DeepResearchGraph:
             "critic": "reviewing",
             "replanner": "replanning",
         }
-        step_type = step_type_map.get(node_name, node_name)
+        step_type = step_type_map.get(node_name)
 
-        # 节点 -> stats
-        if step_type == "scoping":
-            scoping_summary = state.get("scoping_summary", {}) or {}
-            stats = {
-                "sources": len(scoping_summary.get("initial_sources", []) or []),
-                "hot_terms": len(scoping_summary.get("hot_terms", []) or []),
-            }
-        elif step_type == "planning":
-            stats = {"sections": len(state.get("outline", []))}
-        elif step_type == "executing":
-            stats = {
-                "facts": len(state.get("facts", [])),
-                "sources": len(state.get("references", [])),
-                "charts": len(state.get("charts", [])),
-                "sections_drafted": len(state.get("draft_sections", {})),
-            }
-        elif step_type == "reviewing":
-            stats = {
-                "quality_score": state.get("quality_score", 0.0),
-                "unresolved_issues": state.get("unresolved_issues", 0),
-            }
-        elif step_type == "replanning":
-            stats = {
-                "replan_count": state.get("replan_count", 0),
-                "plan_steps": len(state.get("plan", [])),
-            }
-        else:
-            stats = {}
+        if step_type:
+            # 节点 -> stats
+            if step_type == "scoping":
+                scoping_summary = state.get("scoping_summary", {}) or {}
+                stats = {
+                    "sources": len(scoping_summary.get("initial_sources", []) or []),
+                    "hot_terms": len(scoping_summary.get("hot_terms", []) or []),
+                }
+            elif step_type == "planning":
+                stats = {"sections": len(state.get("outline", []))}
+            elif step_type == "executing":
+                stats = {
+                    "facts": len(state.get("facts", [])),
+                    "sources": len(state.get("references", [])),
+                    "charts": len(state.get("charts", [])),
+                    "sections_drafted": len(state.get("draft_sections", {})),
+                }
+            elif step_type == "reviewing":
+                stats = {
+                    "quality_score": state.get("quality_score", 0.0),
+                    "unresolved_issues": state.get("unresolved_issues", 0),
+                }
+            elif step_type == "replanning":
+                stats = {
+                    "replan_count": state.get("replan_count", 0),
+                    "plan_steps": len(state.get("plan", [])),
+                }
+            else:
+                stats = {}
 
-        step_info = {"type": step_type, "status": "completed", "stats": stats}
+            step_info = {"type": step_type, "status": "completed", "stats": stats}
 
-        existing = next(
-            (s for s in ui_state["research_steps"] if s.get("type") == step_type),
-            None,
-        )
-        if existing:
-            existing.update(step_info)
-        else:
-            ui_state["research_steps"].append(step_info)
+            existing = next(
+                (s for s in ui_state["research_steps"] if s.get("type") == step_type),
+                None,
+            )
+            if existing:
+                existing.update(step_info)
+            else:
+                ui_state["research_steps"].append(step_info)
 
         if self._save_checkpoint(state, user_id, ui_state):
             return {

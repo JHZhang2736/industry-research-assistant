@@ -3,7 +3,6 @@
 import json
 import os
 from typing import List, Dict, Any, Optional, Generator
-import uuid
 from openai import OpenAI
 import numpy as np
 from llama_index.core.data_structs import Node

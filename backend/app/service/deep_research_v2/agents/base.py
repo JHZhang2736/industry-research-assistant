@@ -8,10 +8,9 @@ DeepResearch V2.0 - Agent 基类
 
 import json
 import logging
-import asyncio
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional
 from datetime import datetime
 from openai import AsyncOpenAI
 
@@ -23,7 +22,7 @@ except ImportError:  # langsmith 未装时退化为 no-op，保持原 client
         return client
     _LANGSMITH_WRAP_AVAILABLE = False
 
-from ..state import ResearchState, AgentLog
+from ..state import ResearchState
 from ..concurrency import get_llm_semaphore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')

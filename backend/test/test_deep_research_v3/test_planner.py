@@ -203,10 +203,10 @@ def test_refresh_plan_queries_uses_edited_outline(planner):
 
     assert refreshed[0]["args"]["queries"] == [
         "energy storage",
-        "Edited Demand",
-        "Edited Demand New demand framing",
+        "energy storage Edited Demand",
+        "energy storage Edited Demand New demand framing",
     ]
     assert refreshed[1]["args"]["queries"] == [
         "energy storage",
-        "Edited Supply",
+        "energy storage Edited Supply",
     ]

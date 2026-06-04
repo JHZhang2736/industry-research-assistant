@@ -12,12 +12,10 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy.orm import Session
 from core.database import engine, Base
 # 导入所有模型以确保表被创建
 from models import (
-    User, ChatSession, ChatMessage, ChatAttachment,
-    KnowledgeBase, Document, IndustryStats, CompanyData, PolicyData
+    IndustryStats, CompanyData, PolicyData
 )
 
 

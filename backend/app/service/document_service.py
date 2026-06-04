@@ -2,7 +2,7 @@
 
 import os
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 class DocumentService:
     def __init__(self, base_url: str, api_key: str):

@@ -33,13 +33,9 @@
 }
 
 .research-process-container {
-  flex-shrink: 0;
-  width: 280px;
-  position: sticky;
-  top: 24px;
-  align-self: flex-start;
+  margin: 24px 40px 0;
   background: #fff;
   border-radius: 12px;
   border: 1px solid rgba(0, 0, 0, 0.04);
-  padding: 18px;
+  padding: 4px 18px;
 }

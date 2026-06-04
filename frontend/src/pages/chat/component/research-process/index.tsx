@@ -4,11 +4,26 @@ import { CheckOutlined, LoadingOutlined } from '@ant-design/icons'
 import classNames from 'classnames'
 import styles from './index.module.scss'
 
+// 与 research-detail 的 ResearchStep 对齐，覆盖 v3 全部步骤类型
+export type ResearchStepType =
+  | 'scoping'
+  | 'planning'
+  | 'approval'
+  | 'searching'
+  | 'analyzing'
+  | 'generating'
+  | 'executing'
+  | 'writing'
+  | 'reviewing'
+  | 'replanning'
+  | 're_researching'
+  | 'revising'
+
 export interface ResearchStep {
   id: string
-  type: 'planning' | 'searching' | 'analyzing' | 'generating'
+  type: ResearchStepType
   title: string
-  subtitle: string
+  subtitle?: string
   status: 'pending' | 'running' | 'completed'
   stats?: {
     resultsCount?: number
@@ -28,11 +43,20 @@ interface ResearchProcessProps {
   onStepClick?: (stepId: string) => void
 }
 
-const stepConfig: Record<ResearchStep['type'], { icon: string; color: string }> = {
-  planning: { icon: '1', color: '#1677ff' },
-  searching: { icon: '2', color: '#1677ff' },
-  analyzing: { icon: '3', color: '#1677ff' },
-  generating: { icon: '4', color: '#1677ff' },
+// 步骤类型 -> 中文标签，恢复检查点时 title 可能是原始 type，用它兜底
+const stepLabels: Record<ResearchStepType, string> = {
+  scoping: '主题勘察',
+  approval: '确认大纲',
+  planning: '研究计划',
+  searching: '信息检索',
+  analyzing: '数据分析',
+  generating: '内容生成',
+  executing: '研究执行',
+  writing: '撰写报告',
+  reviewing: '质量审核',
+  replanning: '重新规划',
+  re_researching: '补充搜索',
+  revising: '内容修订',
 }
 
 export default function ResearchProcess({ steps, selectedStepId, onStepClick }: ResearchProcessProps) {
@@ -40,10 +64,9 @@ export default function ResearchProcess({ steps, selectedStepId, onStepClick }: 
 
   return (
     <div className={styles.process}>
-      <div className={styles.header}>推理过程</div>
+      <div className={styles.header}>研究流程</div>
       <div className={styles.timeline}>
         {steps.map((step, index) => {
-          const config = stepConfig[step.type]
           const isSelected = step.id === selectedStepId
           const isLast = index === steps.length - 1
 
@@ -81,10 +104,10 @@ export default function ResearchProcess({ steps, selectedStepId, onStepClick }: 
               {/* 内容 */}
               <div className={styles.content}>
                 <div className={styles.title}>
-                  {step.title}
+                  {stepLabels[step.type] || step.title}
                   {step.status === 'running' && <span className={styles.runningDot} />}
                 </div>
-                <div className={styles.subtitle}>{step.subtitle}</div>
+                {step.subtitle ? <div className={styles.subtitle}>{step.subtitle}</div> : null}
 
                 {/* 统计标签 */}
                 {step.stats && step.status === 'completed' && (

@@ -10,7 +10,7 @@ from sqlalchemy import func
 from core.database import get_db
 from models.chat import ChatSession, ChatMessage
 from models.user import User
-from router.auth_router import get_current_user_required, get_current_user
+from router.auth_router import get_current_user_required
 from schemas.chat import (
     SessionCreate,
     SessionUpdate,

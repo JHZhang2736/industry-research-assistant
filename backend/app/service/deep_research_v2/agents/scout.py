@@ -1469,10 +1469,15 @@ URL: {url}
                     headers=headers, json=payload, timeout=30,
                 )
             if response.status_code != 200:
-                raise RuntimeError(f"rerank http {response.status_code}")
+                # 把响应体带上：429/4xx 的真实原因（限流、配额、鉴权）通常都在 body 里
+                raise RuntimeError(
+                    f"rerank http {response.status_code}: {response.text[:300]}"
+                )
             data = response.json()
             if data.get("code") != 200:
-                raise RuntimeError(f"rerank code {data.get('code')}")
+                raise RuntimeError(
+                    f"rerank code {data.get('code')}: {data.get('message') or data.get('msg') or response.text[:300]}"
+                )
 
             scored = []
             for item in data.get("data", {}).get("results", []):

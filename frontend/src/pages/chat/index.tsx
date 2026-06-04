@@ -16,6 +16,7 @@ import Drawer from './component/drawer'
 import Source from './component/source'
 import StepDetailPanel, { StepDetailData } from './component/step-detail-panel'
 import ResearchDetail, { ResearchDetailData, ResearchStep } from './component/research-detail'
+import ResearchProcess from './component/research-process'
 import styles from './index.module.scss'
 import { createChatId, createChatIdText, transportToChatEnter } from './shared'
 
@@ -1631,6 +1632,22 @@ export default function Index() {
             })
             console.log('[恢复状态] 已创建步骤详情:', researchDetailsRef.current.size, '个')
 
+            // 关键：后端 research_steps 用粗粒度节点类型（planning/executing/reviewing），
+            // 但下面恢复 search_results/charts/report/sections 的代码用的是实时事件的细粒度 key
+            // （searching/analyzing/writing）。若不补建这些 bucket，刷新后右侧面板数据会全部填不进去。
+            // aggregatedResearchData 会跨所有 detail 聚合，故 key 命名不影响展示。
+            ;(['searching', 'analyzing', 'writing'] as const).forEach((bucketType) => {
+              if (!researchDetailsRef.current.has(bucketType)) {
+                researchDetailsRef.current.set(bucketType, {
+                  stepId: bucketType,
+                  stepType: bucketType,
+                  title: bucketType,
+                  searchResults: [],
+                  charts: [],
+                })
+              }
+            })
+
             if (checkpoint.status === 'paused' && stateJson?.outline_approval_status === 'pending') {
               const approvalDetail: ResearchDetailData = {
                 stepId: 'approval',
@@ -1676,12 +1693,21 @@ export default function Index() {
                 }
               }
 
-              // 恢复报告 - 使用 stepType 作为 key
-              if (uiState.streaming_report || checkpoint.final_report) {
+              // 恢复报告 + 章节草稿 - 使用 stepType 作为 key
+              if (uiState.streaming_report || checkpoint.final_report || (uiState.sections && uiState.sections.length > 0)) {
                 const detail = researchDetailsRef.current.get('writing')
                 if (detail) {
                   detail.streamingReport = uiState.streaming_report || checkpoint.final_report || ''
-                  console.log('[恢复状态] 恢复报告长度:', detail.streamingReport.length)
+                  // 恢复"过程报告 > 章节草稿"视图，避免刷新后该栏丢失
+                  if (uiState.sections && uiState.sections.length > 0) {
+                    detail.sections = uiState.sections.map((s: any) => ({
+                      id: s.id,
+                      title: s.title || s.id,
+                      content: s.content || '',
+                      wordCount: s.wordCount ?? (s.content ? s.content.length : 0),
+                    }))
+                  }
+                  console.log('[恢复状态] 恢复报告长度:', detail.streamingReport.length, '章节草稿:', detail.sections?.length || 0)
                 }
               }
 
@@ -1972,6 +1998,16 @@ export default function Index() {
       right={rightPanelContent}
       wideRight={isDeepResearchMode}
     >
+      {/* 深度研究模式：左列顶部独立研究流程面板（实时事件 + checkpoint 恢复均喂 researchSteps） */}
+      {isDeepResearchMode && researchSteps.length > 0 && (
+        <div className={styles['research-process-container']}>
+          <ResearchProcess
+            steps={researchSteps}
+            selectedStepId={selectedResearchDetail?.stepId}
+            onStepClick={handleResearchStepClick}
+          />
+        </div>
+      )}
       <div className={styles['chat-page']}>
         <ChatMessage list={list} onSend={send} onStepClick={handleStepClick} />
       </div>

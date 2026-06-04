@@ -134,7 +134,7 @@ async def test_wizard_endpoint():
     使用模拟数据直接测试图表生成功能。
     """
     from service.deep_research_v2.agents.wizard import CodeWizard
-    from service.deep_research_v2.state import ResearchState, ResearchPhase, create_initial_state
+    from service.deep_research_v2.state import ResearchPhase, create_initial_state
     from config.llm_config import get_config
 
     # 使用配置创建 CodeWizard 实例

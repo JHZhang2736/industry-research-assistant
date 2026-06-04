@@ -22,11 +22,6 @@ from router.memory_router import router as memory_router
 from router.database_router import router as database_router
 from core.database import engine, Base
 # 导入所有模型以确保它们被注册
-from models import (
-    User, ChatSession, ChatMessage, ChatAttachment,
-    KnowledgeBase, Document, IndustryStats, CompanyData, PolicyData,
-    ResearchCheckpoint
-)
 
 # 创建所有数据表（如果不存在）
 Base.metadata.create_all(bind=engine)

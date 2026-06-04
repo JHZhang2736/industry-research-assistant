@@ -209,7 +209,7 @@ async def test_continue_with_approved_outline_updates_state_and_streams(monkeypa
     assert saved["user_id"] == "u1"
     assert saved["state"]["outline_approval_status"] == "approved"
     assert saved["state"]["approved_outline"][0]["description"] == "New desc"
-    assert saved["state"]["plan"][0]["args"]["queries"] == ["q", "New", "New New desc"]
+    assert saved["state"]["plan"][0]["args"]["queries"] == ["q", "q New", "q New New desc"]
 
 
 @pytest.mark.asyncio
