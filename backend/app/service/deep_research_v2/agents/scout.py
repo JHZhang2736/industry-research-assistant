@@ -22,6 +22,15 @@ from ..state import ResearchState, ResearchPhase
 from ..concurrency import BOCHA_SEM
 from ..security import detect_injection, guard_results, wrap_untrusted, INJECTION_DEFENSE_PREAMBLE
 
+# Bocha 语义 rerank 配置
+RERANK_API_URL = "https://api.bochaai.com/v1/rerank"
+RERANK_MODEL = "gte-rerank"
+RERANK_THRESHOLD = 0.4      # relevance_score 低于此值的结果丢弃
+RERANK_TOP_N = 10           # rerank 后进入 LLM 抽取的结果数
+MAX_RERANK_DOCS = 50        # Bocha rerank 单次最多文档数
+RERANK_DOC_MAXLEN = 1500    # 单文档拼接最大字符（rerank 仅取前 512 token）
+CREDIBILITY_FLOOR = 0.3     # 最终可信度低于此值的 fact 硬丢弃
+
 # 网页文本提取库（可选依赖）
 try:
     import trafilatura
@@ -48,6 +57,11 @@ except ImportError:
     except ImportError:
         MILVUS_AVAILABLE = False
 
+try:
+    from service.deep_research_v2.source_scoring import final_credibility
+except ImportError:
+    from app.service.deep_research_v2.source_scoring import final_credibility
+
 
 def _ensure_str(value: Any) -> str:
     """把 LLM 偶尔返回的非字符串字段强制转为字符串。
@@ -65,6 +79,36 @@ def _ensure_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+def interleave_unique(result_lists, cap: int = 50):
+    """跨多个 query 的结果列表做轮转(round-robin) + URL 去重 + 截断到 cap。
+
+    目的：当一个章节多个 query 的结果合并后可能超过 Bocha rerank 单次 50 篇上限时，
+    公平地从各 query 取样（而非被某个 query 刷屏），并去掉重复 URL。
+    """
+    seen = set()
+    out = []
+    if not result_lists:
+        return out
+    idx = 0
+    remaining = True
+    while remaining and len(out) < cap:
+        remaining = False
+        for lst in result_lists:
+            if idx < len(lst):
+                remaining = True
+                r = lst[idx]
+                u = r.get("url", "")
+                if u and u in seen:
+                    continue
+                if u:
+                    seen.add(u)
+                out.append(r)
+                if len(out) >= cap:
+                    break
+        idx += 1
+    return out
 
 
 class DeepScout(BaseAgent):
@@ -201,6 +245,7 @@ URL: {url}
         )
         self.search_api_key = search_api_key
         self.search_cache: Dict[str, List] = {}
+        self.rerank_cache: Dict[str, List] = {}
         self.fact_fingerprints: Dict[str, str] = {}  # 事实指纹用于去重
 
         # 初始化本地知识库搜索服务
@@ -347,18 +392,25 @@ URL: {url}
 
                 if analysis:
                     # 添加新事实
+                    url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
                     for fact in analysis.get("extracted_facts", []):
                         content = _ensure_str(fact.get("content"))
                         source_url = _ensure_str(fact.get("source_url"))
 
                         if not self._is_duplicate_fact(content, source_url):
+                            final_cred = self._gated_credibility(
+                                fact.get("credibility_score", 0.5), source_url, url_date_map
+                            )
+                            if final_cred is None:
+                                continue
                             fact_entry = {
                                 "id": f"fact_{uuid.uuid4().hex[:8]}",
                                 "content": content,
                                 "source_url": source_url,
                                 "source_name": fact.get("source_name", ""),
                                 "source_type": fact.get("source_type", "news"),
-                                "credibility_score": fact.get("credibility_score", 0.5),
+                                "credibility_score": final_cred,
+                                "importance": fact.get("importance", "medium"),
                                 "is_supplementary": True,  # 标记为补充搜索获得
                                 "related_sections": []
                             }
@@ -490,16 +542,17 @@ URL: {url}
     ) -> Optional[Dict]:
         """分析补充搜索结果"""
         guarded = guard_results(
-            results[:8],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
             self.logger.warning(
                 f"[InjectionGuard] 补充搜索丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
             )
+        reranked = await self._rerank(search_query, guarded.kept)
         results_text = []
-        for r in guarded.kept:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+        for r in reranked:
+            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1000]}")
 
         prompt = f"""你是一位专业的研究分析师，正在补充搜索以解决审核发现的信息缺失问题。
 
@@ -525,6 +578,7 @@ URL: {url}
             "source_url": "来源URL",
             "source_type": "official/academic/news/report",
             "credibility_score": 0.0-1.0,
+            "importance": "high/medium/low",
             "data_points": [
                 {{"name": "指标名", "value": "数值", "unit": "单位"}}
             ]
@@ -587,12 +641,16 @@ URL: {url}
         })
 
         # 逐个执行搜索，每完成一个就发送事件（提升用户体验）
+        # all_results 仅用于进度展示的累计计数；result_lists 保留各 query 的分组，
+        # 供 interleave_unique 做轮转去重，避免某个 query 刷屏挤掉其它 query。
         all_results = []
+        result_lists = []
         for i, query in enumerate(search_queries):
             # 网络搜索
             if search_web:
                 results = await self._execute_search(query)
                 all_results.extend(results)
+                result_lists.append(results)
 
                 # 搜索完成后立即发送原始结果（让用户看到进度）
                 if results:
@@ -629,6 +687,7 @@ URL: {url}
             if search_local:
                 local_results = await self._execute_local_search(query)
                 all_results.extend(local_results)
+                result_lists.append(local_results)
 
                 if local_results:
                     self.add_message(state, "search_progress", {
@@ -661,6 +720,9 @@ URL: {url}
                         "searchType": "local"
                     })
 
+        # 轮转去重 + 截断到 rerank 上限（公平采样各 query，再交给 rerank）
+        all_results = interleave_unique(result_lists, cap=MAX_RERANK_DOCS)
+
         if not all_results:
             self.logger.warning(f"No search results for section: {section_title}")
             return
@@ -683,6 +745,7 @@ URL: {url}
             # 提取事实（带去重）
             added_facts = 0
             duplicate_facts = 0
+            url_date_map = {r.get("url", ""): r.get("date", "") for r in all_results}
             for fact in analysis.get("extracted_facts", []):
                 content = _ensure_str(fact.get("content"))
                 source_url = _ensure_str(fact.get("source_url"))
@@ -692,13 +755,21 @@ URL: {url}
                     duplicate_facts += 1
                     continue
 
+                # 可信度闸门：低于阈值硬丢弃
+                final_cred = self._gated_credibility(
+                    fact.get("credibility_score", 0.5), source_url, url_date_map
+                )
+                if final_cred is None:
+                    continue
+
                 fact_entry = {
                     "id": f"fact_{uuid.uuid4().hex[:8]}",
                     "content": content,
                     "source_url": source_url,
                     "source_name": fact.get("source_name", ""),
                     "source_type": fact.get("source_type", "news"),
-                    "credibility_score": fact.get("credibility_score", 0.5),
+                    "credibility_score": final_cred,
+                    "importance": fact.get("importance", "medium"),
                     "extracted_at": datetime.now().isoformat(),
                     "related_sections": [section_id],
                     "verified": False,
@@ -821,6 +892,7 @@ URL: {url}
         query: str,
         search_type: str,
         depth: int,
+        url_date_map: Optional[Dict[str, str]] = None,
     ) -> int:
         """Append extracted facts + data_points from one analysis result into state.
 
@@ -832,19 +904,27 @@ URL: {url}
             no other coroutine can interleave between read and append (no await
             inside the dedup check).
         """
+        url_date_map = url_date_map or {}
         added_facts = 0
         for fact in analysis.get("extracted_facts", []):
             content = _ensure_str(fact.get("content"))
             source_url = _ensure_str(fact.get("source_url"))
 
             if not self._is_duplicate_fact(content, source_url):
+                final_cred = self._gated_credibility(
+                    fact.get("credibility_score", 0.5), source_url, url_date_map
+                )
+                if final_cred is None:
+                    continue
+
                 fact_entry = {
                     "id": f"fact_{uuid.uuid4().hex[:8]}",
                     "content": content,
                     "source_url": source_url,
                     "source_name": fact.get("source_name", ""),
                     "source_type": fact.get("source_type", "news"),
-                    "credibility_score": fact.get("credibility_score", 0.5),
+                    "credibility_score": final_cred,
+                    "importance": fact.get("importance", "medium"),
                     "related_sections": [section_id],
                     "search_depth": depth,
                     "search_type": search_type,
@@ -958,8 +1038,9 @@ URL: {url}
                 return
 
             # 提取并添加事实（含数据点）
+            url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
             added_facts = self._ingest_facts(
-                state, analysis, section_id, query, search_type, depth
+                state, analysis, section_id, query, search_type, depth, url_date_map
             )
 
             self.logger.info(
@@ -1005,16 +1086,17 @@ URL: {url}
     ) -> Optional[Dict]:
         """分析深度搜索结果"""
         guarded = guard_results(
-            results[:6],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
             self.logger.warning(
                 f"[InjectionGuard] deep_search 丢弃 {dropped.get('url', '')}: {verdict.matched_patterns}"
             )
+        reranked = await self._rerank(search_query, guarded.kept)
         results_text = []
-        for r in guarded.kept:
-            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:300]}")
+        for r in reranked:
+            results_text.append(f"标题: {r.get('title', 'N/A')}\n来源: {r.get('site_name', 'N/A')}\n内容: {r.get('summary', '')[:1000]}")
 
         hypotheses_text = ""
         if hypotheses:
@@ -1051,6 +1133,7 @@ URL: {url}
             "source_url": "来源URL",
             "source_type": "official/academic/news/report",
             "credibility_score": 0.0-1.0,
+            "importance": "high/medium/low",
             "related_hypothesis": "h_1或null",
             "hypothesis_support": "supports/refutes/neutral"
         }}
@@ -1199,6 +1282,95 @@ URL: {url}
             self.logger.error(f"Bocha search error for '{query}': {e}")
             return []
 
+    async def _rerank(
+        self,
+        query: str,
+        results: List[Dict],
+        top_n: int = RERANK_TOP_N,
+        threshold: float = RERANK_THRESHOLD,
+    ) -> List[Dict]:
+        """用 Bocha 语义 rerank 对搜索结果做相关性排序 + 阈值硬丢弃。
+
+        流程：URL 去重 → 截到 MAX_RERANK_DOCS → 调 rerank →
+        丢 relevance_score < threshold → 按分降序 → 取 top_n。
+        任何失败都降级为「不 rerank，去重后取 top_n（原始顺序）」，不阻塞主流程。
+        命中的结果会带上 relevance_score 字段。
+        """
+        if not results:
+            return []
+
+        # 去重（保序）
+        seen = set()
+        deduped = []
+        for r in results:
+            u = r.get("url", "")
+            if u and u in seen:
+                continue
+            if u:
+                seen.add(u)
+            deduped.append(r)
+
+        if len(deduped) <= 1:
+            return deduped[:top_n]
+
+        candidates = deduped[:MAX_RERANK_DOCS]
+
+        # 缓存键：query + 候选 URL 集
+        cache_key = hashlib.md5(
+            (query + "|" + "|".join(r.get("url", "") for r in candidates)).encode()
+        ).hexdigest()
+        if cache_key in self.rerank_cache:
+            return self.rerank_cache[cache_key]
+
+        documents = [
+            f"{r.get('title', '')} {r.get('summary', '') or r.get('snippet', '')}"[:RERANK_DOC_MAXLEN]
+            for r in candidates
+        ]
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.search_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": RERANK_MODEL,
+                "query": query,
+                "documents": documents,
+                "return_documents": False,
+            }
+            async with BOCHA_SEM:
+                response = await asyncio.to_thread(
+                    requests.post, RERANK_API_URL,
+                    headers=headers, json=payload, timeout=30,
+                )
+            if response.status_code != 200:
+                raise RuntimeError(f"rerank http {response.status_code}")
+            data = response.json()
+            if data.get("code") != 200:
+                raise RuntimeError(f"rerank code {data.get('code')}")
+
+            scored = []
+            for item in data.get("data", {}).get("results", []):
+                idx = item.get("index")
+                score = item.get("relevance_score", 0.0)
+                if isinstance(idx, int) and 0 <= idx < len(candidates) and score >= threshold:
+                    r = dict(candidates[idx])
+                    r["relevance_score"] = score
+                    scored.append(r)
+
+            scored.sort(key=lambda r: r.get("relevance_score", 0.0), reverse=True)
+            out = scored[:top_n]
+            self.rerank_cache[cache_key] = out
+            self.logger.info(
+                f"Rerank: {len(candidates)} -> {len(out)} kept "
+                f"(threshold={threshold}) for query '{query[:30]}...'"
+            )
+            return out
+
+        except Exception as e:
+            self.logger.warning(f"[Rerank] failed, fallback to no-rerank: {e}")
+            return deduped[:top_n]
+
     async def _analyze_search_results(
         self,
         query: str,
@@ -1211,9 +1383,9 @@ URL: {url}
         if not results:
             return None
 
-        # 注入防护：丢弃可疑结果
+        # 注入防护：先丢弃可疑结果（在 rerank 前，不浪费 rerank 名额）
         guarded = guard_results(
-            results[:15],
+            results,
             text_of=lambda r: f"{r.get('title', '')} {r.get('summary', '')}",
         )
         for dropped, verdict in guarded.dropped:
@@ -1222,15 +1394,19 @@ URL: {url}
                 f"{verdict.matched_patterns}"
             )
 
+        # 语义 rerank：按章节相关性排序 + 阈值过滤，取 top_n
+        rerank_query = section.get("title") or query
+        reranked = await self._rerank(rerank_query, guarded.kept)
+
         # 格式化保留的搜索结果
         formatted_results = []
-        for i, r in enumerate(guarded.kept):
+        for i, r in enumerate(reranked):
             formatted_results.append(f"""
 [{i+1}] {r.get('title', 'N/A')}
 URL: {r.get('url', '')}
 来源: {r.get('site_name', 'N/A')}
 日期: {r.get('date', 'N/A')}
-摘要: {r.get('summary', '')[:300]}
+摘要: {r.get('summary', '')[:1000]}
 """)
 
         # 格式化假设
@@ -1434,6 +1610,18 @@ URL: {r.get('url', '')}
         # 保存指纹
         self.fact_fingerprints[fingerprint] = source_url
         return False
+
+    def _gated_credibility(self, llm_score, source_url: str, url_date_map: Dict[str, str]):
+        """计算 fact 的最终可信度并应用硬丢弃阈值。
+
+        返回 final_credibility（>= CREDIBILITY_FLOOR）或 None（应丢弃）。
+        date 从本批搜索结果的 url->date 映射里取（客观、来自 Bocha）。
+        """
+        date = url_date_map.get(source_url, "")
+        final = final_credibility(llm_score, source_url, date)
+        if final < CREDIBILITY_FLOOR:
+            return None
+        return final
 
     def _update_hypothesis_status(self, state: ResearchState, evidence: List[Dict]) -> None:
         """根据证据更新假设状态"""
