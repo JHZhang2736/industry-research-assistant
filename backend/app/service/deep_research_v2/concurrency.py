@@ -7,7 +7,7 @@ in-flight roughly maps to 30-60 QPM in practice.
 Configurable via env:
   DASHSCOPE_MAX_INFLIGHT  (default 10)
   DEEPSEEK_MAX_INFLIGHT   (default 20)
-  BOCHA_MAX_INFLIGHT      (default 8)
+  BOCHA_MAX_INFLIGHT      (default 4)
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _logger = logging.getLogger(__name__)
 
 DASHSCOPE_MAX_INFLIGHT = int(os.getenv("DASHSCOPE_MAX_INFLIGHT", "10"))
 DEEPSEEK_MAX_INFLIGHT  = int(os.getenv("DEEPSEEK_MAX_INFLIGHT", "20"))
-BOCHA_MAX_INFLIGHT     = int(os.getenv("BOCHA_MAX_INFLIGHT", "8"))
+BOCHA_MAX_INFLIGHT     = int(os.getenv("BOCHA_MAX_INFLIGHT", "4"))
 
 DASHSCOPE_SEM = asyncio.Semaphore(DASHSCOPE_MAX_INFLIGHT)
 DEEPSEEK_SEM  = asyncio.Semaphore(DEEPSEEK_MAX_INFLIGHT)

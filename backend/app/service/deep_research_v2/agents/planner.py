@@ -347,11 +347,16 @@ class Planner(BaseAgent):
                 if section:
                     title = str(section.get("title", "")).strip()
                     description = str(section.get("description", "")).strip()
-                    queries = [str(query).strip()]
+                    topic = str(query).strip()
+                    # 每条 query 都与用户主题强绑定：裸章节标题（如“市场规模与增速”）
+                    # 与具体行业无关，搜不到目标信源，必须拼上 topic（如“光电行业 市场规模与增速”）。
+                    queries = []
+                    if topic:
+                        queries.append(topic)
                     if title:
-                        queries.append(title)
-                    if title and description:
-                        queries.append(f"{title} {description}"[:160])
+                        queries.append(f"{topic} {title}".strip())
+                    if description:
+                        queries.append(f"{topic} {title} {description}".strip()[:160])
                     deduped = []
                     for item in queries:
                         if item and item not in deduped:
