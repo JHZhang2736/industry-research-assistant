@@ -2,7 +2,7 @@
 
 """数据库探索路由 - PostgreSQL 可视化 + Text2SQL"""
 import os
-from typing import List, Optional, Any
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field

@@ -3,7 +3,7 @@
 """股票资讯服务 - 聚合数据股票API"""
 import os
 import httpx
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from enum import Enum
 

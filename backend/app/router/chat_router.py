@@ -1,6 +1,6 @@
 
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -140,7 +140,7 @@ async def chat_completion_v2(
         流式响应，包含检索内容和模型生成内容
     """
     chat_service = services["chat_service"]
-    default_dataset_id = services["default_dataset_id"]
+    # default_dataset_id = services["default_dataset_id"]
     session_service = services["session_service"]
 
     # 验证会话ID（如果提供）

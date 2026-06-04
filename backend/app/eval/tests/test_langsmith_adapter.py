@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import pytest
 
 from app.eval.langsmith_adapter import LangSmithAdapter
 from app.eval.types import CaseResult, EvalCase, EvalResult

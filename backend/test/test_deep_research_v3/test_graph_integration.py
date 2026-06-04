@@ -1,6 +1,5 @@
 """4-node 主图集成测试（mock LLM）"""
 import pytest
-import os
 from unittest.mock import AsyncMock
 from app.service.deep_research_v2.state import create_initial_state
 

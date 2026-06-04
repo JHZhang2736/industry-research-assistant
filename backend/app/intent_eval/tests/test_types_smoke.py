@@ -1,7 +1,6 @@
 """Smoke test: 验证 types 模块可加载，dataclass 字段对得上。"""
 from app.intent_eval.types import (
-    EvalCase, CaseResult, PerClassMetrics, LevelMetrics, RunSummary,
-    INTENT_CLASSES, RESEARCH_TYPE_CLASSES, ERROR_LABEL,
+    EvalCase, CaseResult, INTENT_CLASSES, RESEARCH_TYPE_CLASSES,
 )
 
 

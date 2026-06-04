@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.service.intent_service import IntentService, IntentResult
+from app.service.intent_service import IntentService
 
 
 @pytest.fixture

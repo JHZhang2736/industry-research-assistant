@@ -2,7 +2,6 @@
 
 """用户相关 Schema"""
 from datetime import datetime
-from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
 

@@ -27,7 +27,6 @@ def test_empty_input():
     assert interleave_unique([[], []], cap=50) == []
 
 
-import json
 import pytest
 from unittest.mock import AsyncMock
 

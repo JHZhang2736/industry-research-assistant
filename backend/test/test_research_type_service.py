@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.service.research_type_service import ResearchTypeService, ResearchTypeResult
+from app.service.research_type_service import ResearchTypeService
 
 
 @pytest.fixture

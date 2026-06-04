@@ -12,7 +12,7 @@ Plan -> Research -> Analyze -> Write -> Review -> (Revise) -> Complete
 import logging
 import asyncio
 import uuid
-from typing import Dict, Any, List, Literal, AsyncGenerator, Optional
+from typing import Dict, Any, List, AsyncGenerator, Optional
 from datetime import datetime
 
 # 导入取消检查函数
@@ -30,7 +30,7 @@ except (ImportError, SyntaxError):
 
 from langgraph.graph import StateGraph, END
 
-from .state import ResearchState, ResearchPhase, create_initial_state
+from .state import ResearchState, create_initial_state
 
 try:
     from service.intent_service import IntentService

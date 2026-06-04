@@ -15,7 +15,6 @@ import asyncio
 import json
 import base64
 import io
-import sys
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from contextlib import redirect_stdout, redirect_stderr
@@ -1053,13 +1052,13 @@ df = df.dropna()
         self.logger.info(f"[CodeWizard] 清理后代码行数: {code.count(chr(10)) + 1}, 长度: {len(code)}")
 
         # 语法预检查
-        syntax_error = None
+        # syntax_error = None
         try:
             compile(code, '<string>', 'exec')
             self.logger.info(f"[CodeWizard] ✅ 语法预检查: 通过")
             self._save_debug_log("exec_3_syntax", "PASSED")
         except SyntaxError as e:
-            syntax_error = e
+            # syntax_error = e
             self.logger.error(f"[CodeWizard] ❌ 语法预检查失败: {e}")
             self._save_debug_log("exec_3_syntax", f"FAILED: {e}\n\n错误行: {e.lineno}\n\n代码:\n{code}")
             # 保存调试信息
