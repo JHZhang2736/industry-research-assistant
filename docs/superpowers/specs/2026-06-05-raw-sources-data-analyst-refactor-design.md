@@ -61,7 +61,7 @@ RawSource: {
   url, title, site_name, date,
   text,                 # rerank 后的 summary(本就不长,不存全网页 HTML)
   related_sections[],   # 关联章节 id
-  relevance_score,
+  relevance_score,      # rerank 降级路径(scout.py:1502)不挂此字段,写入时缺省 0.0
 }
 
 DataPoint(超集 schema,旧字段保留以保下游兼容):{
@@ -85,10 +85,14 @@ DataPoint(超集 schema,旧字段保留以保下游兼容):{
 - `_execute_deep_search`(`scout.py:1084`)聚合各 query 协程的局部 list 并返回 `{"facts": [...], "sources": [...]}`。
 - `search_with_queries`(`scout.py:1782`)直接返回聚合结果,**删掉 `facts_before:`/`sources_before:` 切片**。
 
+> ⚠️ **必须保留 `_ingest_facts` 对 `state["hypotheses"]` 的 in-place 修改**(`scout.py:1060-1068` 的 `h.setdefault("evidence_for"/"evidence_against", []).append(...)`)。
+> executor 返回字典(`executor.py:473-484`)**不含 `hypotheses`**,所以 in-place mutation 是 hypothesis 证据的**唯一持久化路径**,与 facts(靠 return 存活)是两套不同机制。
+> 重构时:`state["facts"].append(...)` 这种 in-place 写**可删**(会被 executor 的 `merged_facts` 覆盖,是 dead write);但 hypothesis 的就地写**绝不能删**,否则假设证据静默丢失、假设状态再也不更新。
+
 **1b. raw_sources 写入(surface rerank 结果)**
 
 - `_analyze_deep_search_results`(`scout.py:1203`)返回值从 `analysis` 改为 `(analysis, reranked)`。
-- `_process_one_query` 拿到 reranked 后,构造 `RawSource`(`text` = `summary`,`related_sections` = `[section_id]`,带 `relevance_score`),本协程内按 url 去重收集,随 facts 一起返回。
+- `_process_one_query` 拿到 reranked 后,构造 `RawSource`(`text` = `summary`,`related_sections` = `[section_id]`,`relevance_score` = `r.get("relevance_score", 0.0)` 兜底——rerank 失败降级路径 `scout.py:1502` 不挂此字段),本协程内按 url 去重收集,随 facts 一起返回。
 - legacy `_research_section`/`_analyze_search_results` 不动。
 - 注意:scoping 路径被 `test_scout_scoping.py` monkeypatch 掉 `_execute_deep_search`,故 scoping 不写 raw_sources,既有断言 `state["raw_sources"] == []` 仍成立。
 
@@ -99,7 +103,7 @@ DataPoint(超集 schema,旧字段保留以保下游兼容):{
 
 ### Phase 2:DataAnalyst 独占抽数
 
-- `_extract_data`(`data_analyst.py:261`)改读 `state["raw_sources"]`:按 `relevance_score` 降序取 **top-12**,每源 `text` 截到 **1500 字**,不再读 facts。
+- `_extract_data`(`data_analyst.py:261`)改读 `state["raw_sources"]`:按 `relevance_score` 降序取 **top-12**(排序用 `s.get("relevance_score", 0.0)`,避免降级源缺字段报错/排错),每源 `text` 截到 **1500 字**,不再读 facts。
 - `DATA_EXTRACTION_PROMPT` 加 `metric_key`(语义归一,LLM 在原文上下文做)和 `source_url` 字段。
 - 每个 data_point 用 `source_scoring.final_credibility(llm_conf, source_url, date)` 重算可信度(date 从 raw_sources 按 url 映射),低于 `CREDIBILITY_FLOOR` 硬丢弃。
 - `related_sections` 取自命中 raw_source 的 `related_sections`。
@@ -120,6 +124,7 @@ DataPoint(超集 schema,旧字段保留以保下游兼容):{
 新增到 `backend/test/test_deep_research_v3/`:
 
 1. `test_ingest_facts_returns_appended_objects` — `_ingest_facts` 返回它 append 的 fact 列表(不再是 count)。
+1b. `test_ingest_facts_still_mutates_hypotheses` — 传入带 `hypothesis_support`/`related_hypothesis` 的 analysis,断言 `state["hypotheses"]` 的 `evidence_for`/`evidence_against` 被就地累加(守护点 A,防重构误删)。
 2. `test_search_with_queries_concurrent_no_duplicate` — mock `_execute_search` + `_analyze_deep_search_results`,两个 `search_with_queries` 并发跑共享 state,断言各自返回的 facts/sources 无重叠、总数正确。
 3. `test_raw_sources_written_with_relevance` — 断言 raw_sources 被写入且带 `relevance_score`/`related_sections`/`text`。
 4. `test_scout_no_longer_emits_data_points` — Scout 路径跑完 `state["data_points"]` 不增长。
@@ -151,6 +156,7 @@ DataPoint(超集 schema,旧字段保留以保下游兼容):{
 | legacy `_research_section`/v2 process | v3-only + 顺手清 legacy 抽数(不删整个方法) | 主改 v3 路径,顺手保持全仓一致,不扩大重构 |
 | DataAnalyst 取样上限 | top-12 源 / 每源 1500 字 | 召回与成本折中,后续可调 |
 | 跨章节 raw_source 去重 | executor 按 url 合并去重 + 累加 related_sections | 覆盖式合并模型下唯一正确的去重位置 |
+| `metric_key` | 本次**只产出、不消费** | 消费它的 consolidation 是 Phase 3(本次不做)。本轮 metric_key 抽了暂无下游,白费少量 token 且归一质量无法验证,属前瞻预留——实施者勿误以为漏接下游。质量验证留待 Phase 3。 |
 
 ## 不做(本次范围外)
 
