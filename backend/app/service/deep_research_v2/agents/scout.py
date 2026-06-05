@@ -1099,19 +1099,17 @@ URL: {url}
         search_type: str,
         depth: int,
         url_date_map: Optional[Dict[str, str]] = None,
-    ) -> int:
-        """Append extracted facts + data_points from one analysis result into state.
+    ) -> List[Dict[str, Any]]:
+        """把一次分析结果里的 facts 落进 state，并返回本次实际 append 的 fact 对象列表。
 
-        Returns number of new facts added (after dedup). Pure local mutation;
-        safe to call concurrently from multiple coroutines because:
-          - state['facts']/['data_points'] are list.append (atomic in asyncio)
-          - hypothesis evidence is appended via setdefault (atomic)
-          - _is_duplicate_fact reads then writes; under asyncio single-thread,
-            no other coroutine can interleave between read and append (no await
-            inside the dedup check).
+        两套机制（见模块/spec 说明）:
+          - in-place `state['facts'].append` / hypothesis setdefault: 节点内 step 间数据流，保留。
+          - 返回新增对象 list: 供 executor 机制 2 合并（取代旧的切片 diff，修复并发重复计数）。
+        data_point 抽取已移交 DataAnalyst，这里不再产出 data_points。
+        asyncio 单线程下 append/setdefault 原子，dedup 检查内无 await，可并发安全调用。
         """
         url_date_map = url_date_map or {}
-        added_facts = 0
+        added: List[Dict[str, Any]] = []
         for fact in analysis.get("extracted_facts", []):
             content = _ensure_str(fact.get("content"))
             source_url = _ensure_str(fact.get("source_url"))
@@ -1135,8 +1133,8 @@ URL: {url}
                     "search_depth": depth,
                     "search_type": search_type,
                 }
-                state["facts"].append(fact_entry)
-                added_facts += 1
+                state["facts"].append(fact_entry)   # 机制 1：节点内数据流，保留
+                added.append(fact_entry)
 
                 hypothesis_support = fact.get("hypothesis_support")
                 if hypothesis_support and fact.get("related_hypothesis"):
@@ -1148,19 +1146,7 @@ URL: {url}
                             elif hypothesis_support == "refutes":
                                 h.setdefault("evidence_against", []).append(content[:100])
 
-        for dp in analysis.get("data_points", []):
-            state["data_points"].append({
-                "id": f"dp_{uuid.uuid4().hex[:8]}",
-                "name": dp.get("name"),
-                "value": dp.get("value"),
-                "unit": dp.get("unit", ""),
-                "year": dp.get("year"),
-                "source": dp.get("source", query),
-                "confidence": dp.get("confidence", 0.7),
-                "search_depth": depth,
-            })
-
-        return added_facts
+        return added
 
     async def _execute_deep_search(
         self,
