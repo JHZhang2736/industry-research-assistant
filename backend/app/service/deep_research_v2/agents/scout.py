@@ -23,6 +23,87 @@ from ..state import ResearchState, ResearchPhase
 from ..concurrency import BOCHA_SEM
 from ..security import detect_injection, guard_results, wrap_untrusted, INJECTION_DEFENSE_PREAMBLE
 
+BOCHA_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+BOCHA_MAX_ATTEMPTS = 3
+BOCHA_BACKOFF_BASE_SECONDS = 1.0
+BOCHA_BACKOFF_MAX_SECONDS = 8.0
+
+
+def _bocha_body_code(response: Any) -> Optional[int]:
+    try:
+        data = response.json()
+    except Exception:
+        return None
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, int) else None
+
+
+def _is_retryable_bocha_response(response: Any) -> bool:
+    status_code = getattr(response, "status_code", None)
+    if status_code in BOCHA_RETRYABLE_STATUS_CODES:
+        return True
+    return _bocha_body_code(response) in BOCHA_RETRYABLE_STATUS_CODES
+
+
+def _bocha_retry_after_seconds(response: Any) -> Optional[float]:
+    headers = getattr(response, "headers", {}) or {}
+    retry_after = headers.get("Retry-After") if hasattr(headers, "get") else None
+    if retry_after is None:
+        return None
+    try:
+        delay = float(retry_after)
+    except (TypeError, ValueError):
+        return None
+    if delay < 0:
+        return None
+    return min(delay, BOCHA_BACKOFF_MAX_SECONDS)
+
+
+def _bocha_backoff_seconds(response: Any, attempt_index: int) -> float:
+    retry_after = _bocha_retry_after_seconds(response)
+    if retry_after is not None:
+        return retry_after
+    return min(
+        BOCHA_BACKOFF_BASE_SECONDS * (2 ** attempt_index),
+        BOCHA_BACKOFF_MAX_SECONDS,
+    )
+
+
+async def _post_bocha_with_retry(
+    url: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+    *,
+    timeout: int = 30,
+    label: str = "Bocha",
+    logger: Optional[Any] = None,
+) -> Any:
+    for attempt_index in range(BOCHA_MAX_ATTEMPTS):
+        async with BOCHA_SEM:
+            response = await asyncio.to_thread(
+                requests.post,
+                url,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+
+        if not _is_retryable_bocha_response(response):
+            return response
+        if attempt_index == BOCHA_MAX_ATTEMPTS - 1:
+            return response
+
+        delay = _bocha_backoff_seconds(response, attempt_index)
+        if logger:
+            status_code = getattr(response, "status_code", "unknown")
+            logger.warning(
+                f"{label} transient response {status_code}; "
+                f"retrying in {delay:.1f}s "
+                f"({attempt_index + 2}/{BOCHA_MAX_ATTEMPTS})"
+            )
+
+        await asyncio.sleep(delay)
+
 # Bocha 语义 rerank 配置
 RERANK_API_URL = "https://api.bochaai.com/v1/rerank"
 RERANK_MODEL = "gte-rerank"
@@ -1361,15 +1442,14 @@ URL: {url}
 
             self.logger.info(f"Executing Bocha search: {query[:50]}...")
 
-            # Bound concurrent Bocha API calls under free-tier ~10 RPS
-            async with BOCHA_SEM:
-                response = await asyncio.to_thread(
-                    requests.post,
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=30
-                )
+            response = await _post_bocha_with_retry(
+                url,
+                headers,
+                payload,
+                timeout=30,
+                label="Bocha search",
+                logger=self.logger,
+            )
 
             if response.status_code != 200:
                 self.logger.error(f"Bocha API error: {response.status_code} - {response.text[:200]}")
@@ -1463,11 +1543,14 @@ URL: {url}
                 "documents": documents,
                 "return_documents": False,
             }
-            async with BOCHA_SEM:
-                response = await asyncio.to_thread(
-                    requests.post, RERANK_API_URL,
-                    headers=headers, json=payload, timeout=30,
-                )
+            response = await _post_bocha_with_retry(
+                RERANK_API_URL,
+                headers,
+                payload,
+                timeout=30,
+                label="Bocha rerank",
+                logger=self.logger,
+            )
             if response.status_code != 200:
                 # 把响应体带上：429/4xx 的真实原因（限流、配额、鉴权）通常都在 body 里
                 raise RuntimeError(
