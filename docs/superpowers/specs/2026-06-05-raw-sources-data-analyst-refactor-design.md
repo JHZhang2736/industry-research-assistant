@@ -85,14 +85,18 @@ DataPoint(超集 schema,旧字段保留以保下游兼容):{
 - `_execute_deep_search`(`scout.py:1084`)聚合各 query 协程的局部 list 并返回 `{"facts": [...], "sources": [...]}`。
 - `search_with_queries`(`scout.py:1782`)直接返回聚合结果,**删掉 `facts_before:`/`sources_before:` 切片**。
 
-> ⚠️ **必须保留 `_ingest_facts` 对 `state["hypotheses"]` 的 in-place 修改**(`scout.py:1060-1068` 的 `h.setdefault("evidence_for"/"evidence_against", []).append(...)`)。
-> executor 返回字典(`executor.py:473-484`)**不含 `hypotheses`**,所以 in-place mutation 是 hypothesis 证据的**唯一持久化路径**,与 facts(靠 return 存活)是两套不同机制。
-> 重构时:`state["facts"].append(...)` 这种 in-place 写**可删**(会被 executor 的 `merged_facts` 覆盖,是 dead write);但 hypothesis 的就地写**绝不能删**,否则假设证据静默丢失、假设状态再也不更新。
+> ⚠️ **保留所有 in-place `state[...]` 写,只改"返回值"。** executor_node 在**一次节点调用内**用 while 循环跑完整个 plan(search → analyze → write),全程共享同一个 `state` 对象,直到节点末尾才 return `merged_*`。因此存在两套并存且都不可少的机制:
+> 1. **in-place 写 `state["facts"]` / `state["raw_sources"]` 等** = 节点内 step 间数据流(Writer 读 `state["facts"]`、DataAnalyst 读 `state["raw_sources"]`,都发生在同一次 executor_node 调用内)。**绝不能删**,否则下游 step 在本轮读到空。
+> 2. **executor return `merged_*`** = 节点输出 → LangGraph channel → 下个节点 + checkpoint 持久化。**并发重复计数 bug 就出在这里**(切片重叠)。
+>
+> 所以本次修复**只动机制 2 的"返回值"**:`_ingest_facts` 仍 `state["facts"].append(...)`(机制 1,保留),但额外把它 append 的对象收进局部 list 返回;`search_with_queries` 用这个局部 list 返回,不再用 `state["facts"][facts_before:]` 切片。
+> 特别地,`_ingest_facts` 对 `state["hypotheses"]` 的就地写(`scout.py:1060-1068`)更要保留——executor 返回字典(`executor.py:473-484`)**根本不含 `hypotheses`**,in-place 是它**唯一**的持久化路径。
 
 **1b. raw_sources 写入(surface rerank 结果)**
 
 - `_analyze_deep_search_results`(`scout.py:1203`)返回值从 `analysis` 改为 `(analysis, reranked)`。
-- `_process_one_query` 拿到 reranked 后,构造 `RawSource`(`text` = `summary`,`related_sections` = `[section_id]`,`relevance_score` = `r.get("relevance_score", 0.0)` 兜底——rerank 失败降级路径 `scout.py:1502` 不挂此字段),本协程内按 url 去重收集,随 facts 一起返回。
+- `_process_one_query` 拿到 reranked 后,构造 `RawSource`(`text` = `summary`,`related_sections` = `[section_id]`,`relevance_score` = `r.get("relevance_score", 0.0)` 兜底——rerank 失败降级路径 `scout.py:1502` 不挂此字段)。
+- **写入既要 in-place 又要返回**(对应上面两套机制):对每个 reranked 结果,若其 url 已在 `state["raw_sources"]` 中(扫描去重,同步无 await 故并发安全),则把 `section_id` 累加进那条已有 source 的 `related_sections`(in-place,不新建);否则新建 source 对象,既 `state["raw_sources"].append(src)`(机制 1,供本节点内 DataAnalyst 读),又把这个**同一引用**收进局部 list。`_process_one_query` 把局部 source list 随 facts 一起返回(机制 2)。返回的是同一对象引用,故后续协程对 `related_sections` 的就地累加也会反映到返回值里。
 - legacy `_research_section`/`_analyze_search_results` 不动。
 - 注意:scoping 路径被 `test_scout_scoping.py` monkeypatch 掉 `_execute_deep_search`,故 scoping 不写 raw_sources,既有断言 `state["raw_sources"] == []` 仍成立。
 
