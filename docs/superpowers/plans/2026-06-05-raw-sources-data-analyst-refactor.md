@@ -370,9 +370,13 @@ def _fake_search_factory():
 
 def _fake_analyze_factory():
     async def fake_analyze(original_query, search_query, results, search_type, hypotheses, state=None):
+        # 注意：_compute_fact_fingerprint 用 numbers[:3] + CJK关键词[:5] 做指纹。
+        # 纯 ASCII / 无数字的 content 会得到相同指纹 → 被误判重复而丢弃。
+        # 这里给每个 query 注入一个唯一数字（ord 首字母），保证指纹互异。
+        uniq = ord(search_query[0])  # a/b/c/d -> 97/98/99/100
         analysis = {
             "extracted_facts": [
-                {"content": f"fact-{search_query}", "source_url": f"http://ex.com/{search_query}",
+                {"content": f"指标数值 {uniq} 来自查询", "source_url": f"http://ex.com/{search_query}",
                  "source_name": "Ex", "credibility_score": 0.9},
             ],
             "further_tracing_queries": [],
