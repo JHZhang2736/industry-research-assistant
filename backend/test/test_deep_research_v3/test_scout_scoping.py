@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import AsyncMock
 
 from app.service.deep_research_v2.agents import scout as scout_module
 from app.service.deep_research_v2.agents.scout import DeepScout, _tokenize_scope_text
@@ -352,6 +353,123 @@ async def test_execute_search_cache_isolated_by_count(monkeypatch):
     assert calls == [2, 6]
     assert first_results[0]["url"] == "https://example.com/count-2"
     assert second_results[0]["url"] == "https://example.com/count-6"
+
+
+@pytest.mark.asyncio
+async def test_execute_search_retries_rate_limit(monkeypatch):
+    scout = DeepScout(
+        llm_api_key="dummy",
+        llm_base_url="http://dummy",
+        search_api_key="dummy",
+        model="qwen-plus",
+    )
+    sleeps = []
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.text = str(body)
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    attempts = [
+        FakeResponse(429, {"code": 429, "msg": "rate limited"}),
+        FakeResponse(
+            200,
+            {
+                "code": 200,
+                "data": {
+                    "webPages": {
+                        "value": [
+                            {
+                                "url": "https://example.com/retry",
+                                "name": "retry result",
+                                "summary": "retry summary",
+                                "snippet": "retry snippet",
+                                "siteName": "Example",
+                                "datePublished": "2026-01-01",
+                            }
+                        ]
+                    }
+                },
+            },
+        ),
+    ]
+
+    async def fake_to_thread(*args, **kwargs):
+        return attempts.pop(0)
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.to_thread", AsyncMock(side_effect=fake_to_thread))
+    monkeypatch.setattr("asyncio.sleep", AsyncMock(side_effect=fake_sleep))
+
+    results = await scout._execute_search("rate limited query", count=3)
+
+    assert [r["url"] for r in results] == ["https://example.com/retry"]
+    assert sleeps == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_execute_search_uses_exponential_backoff_for_repeated_rate_limits(monkeypatch):
+    scout = DeepScout(
+        llm_api_key="dummy",
+        llm_base_url="http://dummy",
+        search_api_key="dummy",
+        model="qwen-plus",
+    )
+    sleeps = []
+
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self.text = str(body)
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    attempts = [
+        FakeResponse(429, {"code": 429, "msg": "rate limited"}),
+        FakeResponse(503, {"code": 503, "msg": "service busy"}),
+        FakeResponse(
+            200,
+            {
+                "code": 200,
+                "data": {
+                    "webPages": {
+                        "value": [
+                            {
+                                "url": "https://example.com/backoff",
+                                "name": "backoff result",
+                                "summary": "backoff summary",
+                                "snippet": "backoff snippet",
+                                "siteName": "Example",
+                                "datePublished": "2026-01-01",
+                            }
+                        ]
+                    }
+                },
+            },
+        ),
+    ]
+
+    async def fake_to_thread(*args, **kwargs):
+        return attempts.pop(0)
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.to_thread", AsyncMock(side_effect=fake_to_thread))
+    monkeypatch.setattr("asyncio.sleep", AsyncMock(side_effect=fake_sleep))
+
+    results = await scout._execute_search("repeated rate limited query", count=3)
+
+    assert [r["url"] for r in results] == ["https://example.com/backoff"]
+    assert sleeps == [1.0, 2.0]
 
 
 def test_tokenize_scope_text_bounds_cjk_terms():

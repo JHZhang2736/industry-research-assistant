@@ -41,9 +41,11 @@ def scout():
     )
 
 
-def _fake_resp(results):
+def _fake_resp(results, status_code=200, body_text=""):
     class R:
-        status_code = 200
+        def __init__(self):
+            self.status_code = status_code
+            self.text = body_text
 
         def json(self):
             return {"code": 200, "data": {"results": results}}
@@ -88,6 +90,30 @@ async def test_rerank_api_failure_falls_back(scout, monkeypatch):
     out = await scout._rerank("q", docs, top_n=2)
     # 降级：不 rerank，去重后取 top_n（原始顺序）
     assert [r["url"] for r in out] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_rerank_retries_rate_limit_before_fallback(scout, monkeypatch):
+    docs = [_r("a"), _r("b")]
+    attempts = [
+        _fake_resp([], status_code=429, body_text="rate limited"),
+        _fake_resp([{"index": 1, "relevance_score": 0.9}]),
+    ]
+    sleeps = []
+
+    async def fake_to_thread(*args, **kwargs):
+        return attempts.pop(0)
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("asyncio.to_thread", AsyncMock(side_effect=fake_to_thread))
+    monkeypatch.setattr("asyncio.sleep", AsyncMock(side_effect=fake_sleep))
+
+    out = await scout._rerank("q", docs, top_n=2)
+
+    assert [r["url"] for r in out] == ["b"]
+    assert sleeps == [1.0]
 
 
 @pytest.mark.asyncio
