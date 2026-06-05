@@ -1229,7 +1229,7 @@ URL: {url}
             if not analysis:
                 return
 
-            # 提取并添加事实（含数据点）
+            # 提取并添加事实
             url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
             added_facts = self._ingest_facts(
                 state, analysis, section_id, query, search_type, depth, url_date_map
@@ -1237,7 +1237,7 @@ URL: {url}
 
             self.logger.info(
                 f"Deep search ({search_type}, depth={depth}): "
-                f"+{added_facts} facts for query '{query[:30]}...'"
+                f"+{len(added_facts)} facts for query '{query[:30]}...'"
             )
 
             # 递归更深层线索（深度受 max_depth 控）
