@@ -1300,6 +1300,57 @@ export default function Index() {
             continue
           }
 
+          if (json.type === 'chart') {
+            const content = json.content || json
+            const stepType = 'analyzing' as ResearchStep['type']
+            let detail = researchDetailsRef.current.get(stepType)
+            if (!detail) {
+              detail = {
+                stepId: stepType,
+                stepType,
+                title: 'analyzing',
+                searchResults: [],
+                charts: [],
+              }
+              researchDetailsRef.current.set(stepType, detail)
+            }
+
+            const chartObj = {
+              id: content.id || uniqueId('chart_'),
+              type: content.chart_type || content.type || 'generated',
+              title: content.title || '数据图表',
+              echarts_option: content.echarts_option,
+              image_base64: content.image || content.image_base64,
+              data: content.data,
+            }
+
+            if (!target.charts) {
+              target.charts = []
+            }
+            target.charts.push(chartObj)
+            detail.charts = [...(detail.charts || []), chartObj]
+            setResearchSteps(prev => {
+              const existing = prev.find(s => s.type === stepType)
+              const next = existing
+                ? prev.map(s => s.type === stepType
+                  ? { ...s, stats: { ...s.stats, chartsCount: detail.charts?.length || 0 } }
+                  : s)
+                : [...prev, {
+                  id: stepType,
+                  type: stepType,
+                  title: 'analyzing',
+                  subtitle: '',
+                  status: 'running' as const,
+                  stats: { chartsCount: detail.charts?.length || 0 },
+                }]
+              researchStepsRef.current = next
+              return next
+            })
+            setSelectedResearchDetail({ ...detail })
+            setResearchDataVersion(v => v + 1)
+            continue
+          }
+
           if (json.type === 'section_content') {
             const content = json.content || json
             const stepType = 'writing' as ResearchStep['type']
