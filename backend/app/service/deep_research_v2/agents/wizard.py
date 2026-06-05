@@ -28,6 +28,61 @@ except ImportError:
     from app.config.llm_config import get_config
 
 
+CJK_FONT_FAMILIES = [
+    "WenQuanYi Zen Hei",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "SimHei",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+
+
+def _available_font_families() -> set[str]:
+    try:
+        from matplotlib import font_manager
+    except Exception:
+        return set()
+    return {font.name for font in font_manager.fontManager.ttflist}
+
+
+def _resolve_cjk_font_families() -> List[str]:
+    available_fonts = _available_font_families()
+    if not available_fonts:
+        return CJK_FONT_FAMILIES
+
+    resolved = [
+        font
+        for font in CJK_FONT_FAMILIES
+        if font in available_fonts and font != "DejaVu Sans"
+    ]
+    if "DejaVu Sans" in available_fonts:
+        resolved.append("DejaVu Sans")
+    return resolved or CJK_FONT_FAMILIES
+
+
+def _configure_matplotlib_for_chinese(plt) -> None:
+    plt.rcParams["font.family"] = "sans-serif"
+    plt.rcParams["font.sans-serif"] = _resolve_cjk_font_families()
+    plt.rcParams["axes.unicode_minus"] = False
+
+
+def _apply_chinese_fonts_to_figure(fig) -> None:
+    fonts = _resolve_cjk_font_families()
+    for ax in fig.get_axes():
+        for text in ax.get_xticklabels() + ax.get_yticklabels():
+            text.set_fontfamily(fonts)
+        if ax.get_title():
+            ax.title.set_fontfamily(fonts)
+        if ax.get_xlabel():
+            ax.xaxis.label.set_fontfamily(fonts)
+        if ax.get_ylabel():
+            ax.yaxis.label.set_fontfamily(fonts)
+
+
 class CodeWizard(BaseAgent):
     """
     数据极客 - 代码与数据分析专家
@@ -1129,8 +1184,7 @@ df = df.dropna()
         import matplotlib
         matplotlib.use('Agg')  # 非交互式后端
         import matplotlib.pyplot as plt
-        plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # 或者 'SimHei'
-        plt.rcParams['axes.unicode_minus'] = False  # 正常显示负号
+        _configure_matplotlib_for_chinese(plt)
 
         # 预导入所有允许的模块
         import pandas as pd
@@ -1242,13 +1296,7 @@ df = df.dropna()
 
         try:
             # ========== 预设高级图表样式 ==========
-            # 中文字体
-            chinese_fonts = [
-                'Heiti TC', 'STHeiti', 'PingFang HK', 'Hiragino Sans GB',
-                'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans'
-            ]
-            plt.rcParams['font.sans-serif'] = chinese_fonts
-            plt.rcParams['axes.unicode_minus'] = False
+            _configure_matplotlib_for_chinese(plt)
 
             # 高级默认样式
             plt.rcParams['figure.figsize'] = [12, 7]
@@ -1283,11 +1331,7 @@ df = df.dropna()
             self.logger.info(f"[CodeWizard] exec() 完成")
 
             # exec 之后再次强制设置字体（防止 LLM 代码里的 sns.set() 等覆盖）
-            plt.rcParams['font.sans-serif'] = [
-                'Heiti TC', 'STHeiti', 'PingFang HK', 'Hiragino Sans GB',
-                'SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans'
-            ]
-            plt.rcParams['axes.unicode_minus'] = False
+            _configure_matplotlib_for_chinese(plt)
 
             # 检查是否生成了图表
             fig = plt.gcf()
@@ -1300,16 +1344,7 @@ df = df.dropna()
             if fig.get_axes():
                 self.logger.info(f"[CodeWizard] 检测到图表，开始捕获...")
                 # 重新应用字体到当前图表的所有文本元素
-                chinese_fonts = ['Heiti TC', 'STHeiti', 'PingFang HK', 'Hiragino Sans GB', 'Arial Unicode MS']
-                for ax in fig.get_axes():
-                    for text in ax.get_xticklabels() + ax.get_yticklabels():
-                        text.set_fontfamily(chinese_fonts)
-                    if ax.get_title():
-                        ax.title.set_fontfamily(chinese_fonts)
-                    if ax.get_xlabel():
-                        ax.xaxis.label.set_fontfamily(chinese_fonts)
-                    if ax.get_ylabel():
-                        ax.yaxis.label.set_fontfamily(chinese_fonts)
+                _apply_chinese_fonts_to_figure(fig)
 
                 buf = io.BytesIO()
                 fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')

@@ -25,6 +25,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     PATH=/root/.local/bin:$PATH
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-wqy-zenhei \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy installed packages from builder
 COPY --from=builder /root/.local /root/.local
 

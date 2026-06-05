@@ -10,6 +10,107 @@ def wizard():
     return CodeWizard(llm_api_key="k", llm_base_url="http://x", model="deepseek-v3.2")
 
 
+def test_backend_runtime_image_installs_cjk_font_package():
+    from pathlib import Path
+
+    dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
+    assert "fonts-wqy-zenhei" in dockerfile.read_text(encoding="utf-8")
+
+
+def test_inprocess_sandbox_configures_cjk_font_stack(monkeypatch):
+    from app.service.deep_research_v2.agents import wizard as wizard_module
+
+    monkeypatch.setattr(
+        wizard_module,
+        "_available_font_families",
+        lambda: {"WenQuanYi Zen Hei", "Microsoft YaHei", "DejaVu Sans"},
+    )
+
+    configure_fonts = getattr(wizard_module, "_configure_matplotlib_for_chinese", None)
+    assert callable(configure_fonts)
+
+    class FakePlot:
+        rcParams = {}
+
+    configure_fonts(FakePlot)
+
+    fonts = FakePlot.rcParams["font.sans-serif"]
+    assert fonts[0] == "WenQuanYi Zen Hei"
+    assert "Microsoft YaHei" in fonts
+    assert FakePlot.rcParams["axes.unicode_minus"] is False
+
+
+def test_inprocess_sandbox_filters_missing_cjk_fonts(monkeypatch):
+    from app.service.deep_research_v2.agents import wizard as wizard_module
+
+    monkeypatch.setattr(
+        wizard_module,
+        "_available_font_families",
+        lambda: {"Microsoft YaHei", "DejaVu Sans"},
+    )
+
+    class FakePlot:
+        rcParams = {}
+
+    wizard_module._configure_matplotlib_for_chinese(FakePlot)
+
+    fonts = FakePlot.rcParams["font.sans-serif"]
+    assert fonts[0] == "Microsoft YaHei"
+    assert "WenQuanYi Zen Hei" not in fonts
+    assert fonts[-1] == "DejaVu Sans"
+
+
+def test_inprocess_sandbox_applies_resolved_fonts_to_existing_text(monkeypatch):
+    from app.service.deep_research_v2.agents import wizard as wizard_module
+
+    monkeypatch.setattr(
+        wizard_module,
+        "_available_font_families",
+        lambda: {"Microsoft YaHei", "DejaVu Sans"},
+    )
+
+    applied = []
+
+    class FakeText:
+        def set_fontfamily(self, fonts):
+            applied.append(fonts)
+
+    class FakeAxis:
+        label = FakeText()
+
+    class FakeAxes:
+        title = FakeText()
+        xaxis = FakeAxis()
+        yaxis = FakeAxis()
+
+        def get_xticklabels(self):
+            return [FakeText()]
+
+        def get_yticklabels(self):
+            return [FakeText()]
+
+        def get_title(self):
+            return "title"
+
+        def get_xlabel(self):
+            return "x"
+
+        def get_ylabel(self):
+            return "y"
+
+    class FakeFigure:
+        def get_axes(self):
+            return [FakeAxes()]
+
+    apply_fonts = getattr(wizard_module, "_apply_chinese_fonts_to_figure", None)
+    assert callable(apply_fonts)
+
+    apply_fonts(FakeFigure())
+
+    assert applied
+    assert all(fonts == ["Microsoft YaHei", "DejaVu Sans"] for fonts in applied)
+
+
 @pytest.mark.asyncio
 async def test_docker_mode_uses_docker_executor(wizard, monkeypatch):
     monkeypatch.setenv("SANDBOX_MODE", "docker")
