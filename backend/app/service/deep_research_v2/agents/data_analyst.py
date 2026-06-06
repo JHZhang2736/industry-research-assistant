@@ -23,6 +23,11 @@ RAW_SOURCE_TOP_N = 12
 RAW_SOURCE_TEXT_MAXLEN = 1500
 
 
+def _norm_url(u: str) -> str:
+    """归一化 url 用于匹配：去首尾空白、去尾部斜杠。容忍 LLM 回填时的轻微格式漂移。"""
+    return (u or "").strip().rstrip("/")
+
+
 class DataAnalyst(BaseAgent):
     """
     数据分析师 - 专注于数据提取和可视化
@@ -286,7 +291,7 @@ class DataAnalyst(BaseAgent):
         blocks = []
         url_meta = {}
         for i, s in enumerate(top):
-            url = s.get("url", "")
+            url = _norm_url(s.get("url", ""))
             url_meta[url] = {
                 "date": s.get("date", ""),
                 "name": s.get("site_name", ""),
@@ -315,8 +320,13 @@ class DataAnalyst(BaseAgent):
         # data_points：重算可信度（硬丢弃）+ 超集 schema（含旧别名）
         kept = []
         for dp in result.get("data_points", []):
-            source_url = dp.get("source_url", "")
+            source_url = _norm_url(dp.get("source_url", ""))
             meta = url_meta.get(source_url, {})
+            if source_url and not meta:
+                # source_url 不在本次提供的来源里（LLM 回填异常/可能臆造）——保留但告警，便于审计
+                self.logger.warning(
+                    f"[DataAnalyst] data_point source_url 不在 top 来源内: {source_url}"
+                )
             cred = final_credibility(
                 dp.get("confidence", dp.get("credibility", 0.5)),
                 source_url,

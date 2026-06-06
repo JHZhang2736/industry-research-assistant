@@ -98,3 +98,51 @@ async def test_extract_data_points_diff_returns_four_kinds(monkeypatch):
     assert diff["time_series"] == [{"id": "ts1"}]
     assert diff["distributions"] == [{"id": "d1"}]
     assert diff["insights"] == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_extract_data_unmatched_source_url_kept_with_empty_meta(monkeypatch):
+    """source_url 不匹配任何 raw_source 时：保留 data_point，related_sections 为空"""
+    analyst = _make_analyst()
+    state = create_initial_state("q", "sid")
+    state["raw_sources"] = [
+        {"url": "http://gov.cn/r1", "title": "t", "site_name": "统计局",
+         "date": "2026-01-01", "text": "数据 100", "related_sections": ["sec_1"],
+         "relevance_score": 0.9},
+    ]
+
+    async def fake_call_llm(*a, **k):
+        # 故意给一个不在 raw_sources 里的 url（且为可信域名，确保过 floor）
+        return json.dumps({"data_points": [
+            {"metric_key": "m", "name": "m", "value": 100, "unit": "", "year": 2026,
+             "source_url": "http://gov.cn/UNSEEN", "source": "统计局", "confidence": 0.95}],
+            "time_series": [], "distributions": [], "insights": []})
+
+    monkeypatch.setattr(analyst, "call_llm", fake_call_llm)
+    await analyst._extract_data(state)
+    assert len(state["data_points"]) == 1
+    assert state["data_points"][0]["related_sections"] == []
+
+
+@pytest.mark.asyncio
+async def test_extract_data_matches_url_with_trailing_slash(monkeypatch):
+    """raw_source url 与 LLM 回填 url 仅尾斜杠不同时仍能匹配上 meta"""
+    analyst = _make_analyst()
+    state = create_initial_state("q", "sid")
+    state["raw_sources"] = [
+        {"url": "http://gov.cn/r1/", "title": "t", "site_name": "统计局",
+         "date": "2026-01-01", "text": "数据 100", "related_sections": ["sec_9"],
+         "relevance_score": 0.9},
+    ]
+
+    async def fake_call_llm(*a, **k):
+        return json.dumps({"data_points": [
+            {"metric_key": "m", "name": "m", "value": 100, "unit": "", "year": 2026,
+             "source_url": "http://gov.cn/r1", "confidence": 0.9}],  # 无尾斜杠
+            "time_series": [], "distributions": [], "insights": []})
+
+    monkeypatch.setattr(analyst, "call_llm", fake_call_llm)
+    await analyst._extract_data(state)
+    assert len(state["data_points"]) == 1
+    # 归一化后匹配上 meta → related_sections 来自该 raw_source
+    assert state["data_points"][0]["related_sections"] == ["sec_9"]
