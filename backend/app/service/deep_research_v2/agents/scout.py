@@ -254,9 +254,6 @@ class DeepScout(BaseAgent):
             "source_url": "来源URL",
             "source_type": "official/academic/news/report/self_media",
             "credibility_score": 0.0-1.0,
-            "data_points": [
-                {{"name": "指标名", "value": "数值", "unit": "单位", "year": 2024}}
-            ],
             "needs_verification": true或false,
             "importance": "high/medium/low",
             "related_hypothesis": "h_1或h_2或null",
@@ -985,19 +982,6 @@ URL: {url}
                 }
                 state["facts"].append(fact_entry)
                 added_facts += 1
-
-                # 提取数据点
-                for dp in fact.get("data_points", []):
-                    data_point = {
-                        "id": f"dp_{uuid.uuid4().hex[:8]}",
-                        "name": dp.get("name", ""),
-                        "value": dp.get("value", ""),
-                        "unit": dp.get("unit", ""),
-                        "year": dp.get("year"),
-                        "source": fact.get("source_name", ""),
-                        "confidence": fact.get("credibility_score", 0.5)
-                    }
-                    state["data_points"].append(data_point)
 
             if duplicate_facts > 0:
                 self.logger.info(f"Deduplicated {duplicate_facts} facts, added {added_facts}")
