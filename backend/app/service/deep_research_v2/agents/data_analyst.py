@@ -14,6 +14,18 @@ from typing import Dict, Any, List
 
 from .base import BaseAgent
 from ..state import ResearchState, ResearchPhase
+from ..source_scoring import final_credibility
+
+# data_point 最终可信度低于此值硬丢弃（与 scout.CREDIBILITY_FLOOR 一致）
+CREDIBILITY_FLOOR = 0.3
+# DataAnalyst 抽数取样上限（控制 token）
+RAW_SOURCE_TOP_N = 12
+RAW_SOURCE_TEXT_MAXLEN = 1500
+
+
+def _norm_url(u: str) -> str:
+    """归一化 url 用于匹配：去首尾空白、去尾部斜杠。容忍 LLM 回填时的轻微格式漂移。"""
+    return (u or "").strip().rstrip("/")
 
 
 class DataAnalyst(BaseAgent):
@@ -50,10 +62,12 @@ class DataAnalyst(BaseAgent):
     "data_points": [
         {{
             "id": "dp_001",
+            "metric_key": "china_ai_market_size",
             "name": "中国AI市场规模",
             "value": 5000,
             "unit": "亿元",
             "year": 2024,
+            "source_url": "https://www.gov.cn/xxx",
             "source": "艾瑞咨询",
             "category": "market_size",
             "confidence": 0.9
@@ -94,6 +108,8 @@ class DataAnalyst(BaseAgent):
 注意：
 - 只提取有明确来源的数据
 - confidence表示数据可信度(0-1)
+- metric_key 用英文 snake_case 表示同一指标的归一化键（如 "china_ai_market_size"），同一指标在不同来源/年份用相同 metric_key
+- source_url 必须填该数据点所依据来源的 URL（从上方各 [来源N] 标注的 URL 中选）
 - 如果没有找到相关数据，返回空数组"""
 
     # 图表生成 Prompt
@@ -259,46 +275,102 @@ class DataAnalyst(BaseAgent):
         return state
 
     async def _extract_data(self, state: ResearchState) -> Dict[str, Any]:
-        """从搜索结果中提取结构化数据"""
-        self.logger.info("Extracting structured data...")
+        """从 raw_sources（未压缩原文）提取结构化数据。DataAnalyst 是唯一抽数 owner。"""
+        self.logger.info("Extracting structured data from raw_sources...")
 
-        # 收集搜索结果
-        search_results_text = []
-        for fact in state.get("facts", [])[:20]:
-            search_results_text.append(f"- {fact.get('content', '')} (来源: {fact.get('source_name', '未知')})")
-
-        if not search_results_text:
-            self.logger.info("No facts to extract data from")
+        raw_sources = state.get("raw_sources", [])
+        if not raw_sources:
+            self.logger.info("No raw_sources to extract data from")
             return {"data_points": [], "time_series": [], "distributions": [], "insights": []}
+
+        # 按 relevance 降序取 top-N，控制 token
+        top = sorted(
+            raw_sources, key=lambda s: s.get("relevance_score", 0.0), reverse=True
+        )[:RAW_SOURCE_TOP_N]
+
+        blocks = []
+        url_meta = {}
+        for i, s in enumerate(top):
+            url = _norm_url(s.get("url", ""))
+            url_meta[url] = {
+                "date": s.get("date", ""),
+                "name": s.get("site_name", ""),
+                "related_sections": s.get("related_sections", []),
+            }
+            text = (s.get("text", "") or "")[:RAW_SOURCE_TEXT_MAXLEN]
+            blocks.append(
+                f"[来源{i+1}] {s.get('title', '')} | {s.get('site_name', '')} | {url}\n{text}"
+            )
 
         prompt = self.DATA_EXTRACTION_PROMPT.format(
             query=state["query"],
-            search_results="\n".join(search_results_text)
+            search_results="\n\n".join(blocks),
         )
 
         response = await self.call_llm(
-            system_prompt="你是专业的数据分析师，擅长从文本中提取结构化数据。请输出JSON格式。",
+            system_prompt="你是专业的数据分析师，擅长从原文中提取结构化数据。请输出JSON格式。",
             user_prompt=prompt,
             json_mode=True,
             temperature=0.2,
             state=state,
             action="extract_data",
         )
-
         result = self.parse_json_response(response)
 
-        # 更新数据点到状态
-        if result.get("data_points"):
-            for dp in result["data_points"]:
-                state["data_points"].append(dp)
+        # data_points：重算可信度（硬丢弃）+ 超集 schema（含旧别名）
+        kept = []
+        for dp in result.get("data_points", []):
+            source_url = _norm_url(dp.get("source_url", ""))
+            meta = url_meta.get(source_url, {})
+            if source_url and not meta:
+                # source_url 不在本次提供的来源里（LLM 回填异常/可能臆造）——保留但告警，便于审计
+                self.logger.warning(
+                    f"[DataAnalyst] data_point source_url 不在 top 来源内: {source_url}"
+                )
+            cred = final_credibility(
+                dp.get("confidence", dp.get("credibility", 0.5)),
+                source_url,
+                meta.get("date", ""),
+            )
+            if cred < CREDIBILITY_FLOOR:
+                continue
+            source_name = dp.get("source") or meta.get("name", "")
+            entry = {
+                "id": dp.get("id") or f"dp_{uuid.uuid4().hex[:8]}",
+                "metric_key": dp.get("metric_key", ""),
+                "name": dp.get("name", ""),
+                "value": dp.get("value"),
+                "unit": dp.get("unit", ""),
+                "year": dp.get("year"),
+                "source_url": source_url,
+                "source_name": source_name,
+                "credibility": cred,
+                "related_sections": meta.get("related_sections", []),
+                # 旧别名（下游 Critic/Writer/Wizard 兼容）
+                "source": source_name,
+                "confidence": cred,
+            }
+            state["data_points"].append(entry)
+            kept.append(entry)
 
-        # 更新洞察
+        # time_series / distributions：仅存（下游消费留待后续）
+        state.setdefault("time_series", []).extend(result.get("time_series", []))
+        state.setdefault("distributions", []).extend(result.get("distributions", []))
+
         if result.get("insights"):
             state["insights"].extend(result["insights"])
 
-        self.logger.info(f"Extracted {len(result.get('data_points', []))} data points, {len(result.get('time_series', []))} time series")
-
-        return result
+        self.logger.info(
+            f"Extracted {len(kept)} data points (kept), "
+            f"{len(result.get('time_series', []))} time_series, "
+            f"{len(result.get('distributions', []))} distributions"
+        )
+        return {
+            "data_points": kept,
+            "time_series": result.get("time_series", []),
+            "distributions": result.get("distributions", []),
+            "insights": result.get("insights", []),
+        }
 
     async def _generate_charts(self, state: ResearchState, extracted_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """生成可视化图表"""
@@ -388,27 +460,23 @@ class DataAnalyst(BaseAgent):
         return self.parse_json_response(response)
 
     async def extract_data_points(self, state: ResearchState) -> Dict[str, Any]:
-        """v3 入口：从 state["facts"] 提取 data_points + insights
+        """v3 入口：从 state["raw_sources"] 提取 data_points/time_series/distributions/insights。
 
-        复用现有 _extract_data 内部逻辑（mutates state）。
-        用 snapshot/diff 方案捕获 data_points/insights 新增项。
-
-        state 会被现有方法 mutate（保留兼容），返回 dict 描述本次新增/最终值。
+        复用 _extract_data（mutates state），用 snapshot/diff 捕获四类新增项返回。
         """
-        facts = state.get("facts", [])
-        if not facts:
-            return {
-                "data_points": [],
-                "insights": [],
-            }
+        if not state.get("raw_sources"):
+            return {"data_points": [], "time_series": [], "distributions": [], "insights": []}
 
         dp_before = len(state.get("data_points", []))
+        ts_before = len(state.get("time_series", []))
+        dist_before = len(state.get("distributions", []))
         insights_before = len(state.get("insights", []))
 
-        # 复用现有 _extract_data（mutates state["data_points"] + state["insights"]）
         await self._extract_data(state)
 
         return {
             "data_points": state.get("data_points", [])[dp_before:],
+            "time_series": state.get("time_series", [])[ts_before:],
+            "distributions": state.get("distributions", [])[dist_before:],
             "insights": state.get("insights", [])[insights_before:],
         }

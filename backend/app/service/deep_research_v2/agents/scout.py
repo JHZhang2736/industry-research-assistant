@@ -15,7 +15,7 @@ import asyncio
 import hashlib
 import re
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 from .base import BaseAgent
@@ -254,9 +254,6 @@ class DeepScout(BaseAgent):
             "source_url": "来源URL",
             "source_type": "official/academic/news/report/self_media",
             "credibility_score": 0.0-1.0,
-            "data_points": [
-                {{"name": "指标名", "value": "数值", "unit": "单位", "year": 2024}}
-            ],
             "needs_verification": true或false,
             "importance": "high/medium/low",
             "related_hypothesis": "h_1或h_2或null",
@@ -986,19 +983,6 @@ URL: {url}
                 state["facts"].append(fact_entry)
                 added_facts += 1
 
-                # 提取数据点
-                for dp in fact.get("data_points", []):
-                    data_point = {
-                        "id": f"dp_{uuid.uuid4().hex[:8]}",
-                        "name": dp.get("name", ""),
-                        "value": dp.get("value", ""),
-                        "unit": dp.get("unit", ""),
-                        "year": dp.get("year"),
-                        "source": fact.get("source_name", ""),
-                        "confidence": fact.get("credibility_score", 0.5)
-                    }
-                    state["data_points"].append(data_point)
-
             if duplicate_facts > 0:
                 self.logger.info(f"Deduplicated {duplicate_facts} facts, added {added_facts}")
 
@@ -1099,19 +1083,17 @@ URL: {url}
         search_type: str,
         depth: int,
         url_date_map: Optional[Dict[str, str]] = None,
-    ) -> int:
-        """Append extracted facts + data_points from one analysis result into state.
+    ) -> List[Dict[str, Any]]:
+        """把一次分析结果里的 facts 落进 state，并返回本次实际 append 的 fact 对象列表。
 
-        Returns number of new facts added (after dedup). Pure local mutation;
-        safe to call concurrently from multiple coroutines because:
-          - state['facts']/['data_points'] are list.append (atomic in asyncio)
-          - hypothesis evidence is appended via setdefault (atomic)
-          - _is_duplicate_fact reads then writes; under asyncio single-thread,
-            no other coroutine can interleave between read and append (no await
-            inside the dedup check).
+        两套机制（见模块/spec 说明）:
+          - in-place `state['facts'].append` / hypothesis setdefault: 节点内 step 间数据流，保留。
+          - 返回新增对象 list: 供 executor 机制 2 合并（取代旧的切片 diff，修复并发重复计数）。
+        data_point 抽取已移交 DataAnalyst，这里不再产出 data_points。
+        asyncio 单线程下 append/setdefault 原子，dedup 检查内无 await，可并发安全调用。
         """
         url_date_map = url_date_map or {}
-        added_facts = 0
+        added: List[Dict[str, Any]] = []
         for fact in analysis.get("extracted_facts", []):
             content = _ensure_str(fact.get("content"))
             source_url = _ensure_str(fact.get("source_url"))
@@ -1135,8 +1117,8 @@ URL: {url}
                     "search_depth": depth,
                     "search_type": search_type,
                 }
-                state["facts"].append(fact_entry)
-                added_facts += 1
+                state["facts"].append(fact_entry)   # 机制 1：节点内数据流，保留
+                added.append(fact_entry)
 
                 hypothesis_support = fact.get("hypothesis_support")
                 if hypothesis_support and fact.get("related_hypothesis"):
@@ -1148,19 +1130,7 @@ URL: {url}
                             elif hypothesis_support == "refutes":
                                 h.setdefault("evidence_against", []).append(content[:100])
 
-        for dp in analysis.get("data_points", []):
-            state["data_points"].append({
-                "id": f"dp_{uuid.uuid4().hex[:8]}",
-                "name": dp.get("name"),
-                "value": dp.get("value"),
-                "unit": dp.get("unit", ""),
-                "year": dp.get("year"),
-                "source": dp.get("source", query),
-                "confidence": dp.get("confidence", 0.7),
-                "search_depth": depth,
-            })
-
-        return added_facts
+        return added
 
     async def _execute_deep_search(
         self,
@@ -1171,7 +1141,7 @@ URL: {url}
         hypotheses: List[Dict],
         depth: int = 1,
         max_depth: int = 2
-    ) -> None:
+    ) -> Dict[str, Any]:
         """
         执行深度递归搜索
 
@@ -1186,7 +1156,7 @@ URL: {url}
         """
         if depth > max_depth:
             self.logger.info(f"Reached max recursion depth ({max_depth})")
-            return
+            return {"facts": [], "sources": []}
 
         type_labels = {
             "source_tracing": "信源追溯",
@@ -1209,7 +1179,7 @@ URL: {url}
             """
             results = await self._execute_search(query, count=6)
             if not results:
-                return
+                return {"facts": [], "sources": []}
 
             # 立即发送搜索结果供前端展示（增量）
             search_results_for_ui = [
@@ -1230,8 +1200,8 @@ URL: {url}
                 "depth": depth,
             })
 
-            # 分析结果
-            analysis = await self._analyze_deep_search_results(
+            # 分析结果（返回 (analysis, reranked)）
+            analysis, reranked = await self._analyze_deep_search_results(
                 state["query"],
                 query,
                 results,
@@ -1241,20 +1211,49 @@ URL: {url}
             )
 
             if not analysis:
-                return
+                return {"facts": [], "sources": []}
 
-            # 提取并添加事实（含数据点）
+            # 写 raw_sources：按 url 去重（机制 1，供本节点内 DataAnalyst 读），
+            # 同时收进局部 list 返回（机制 2，供 executor 合并）。同步无 await，并发安全。
+            local_sources: List[Dict[str, Any]] = []
+            existing_by_url = {s.get("url"): s for s in state["raw_sources"] if s.get("url")}
+            for r in reranked:
+                url = r.get("url", "")
+                if not url:
+                    continue
+                # 已有 url：只就地累加 section_id（机制 1）。不重复加进 local_sources——
+                # 该 source 已被「首个遇到它的协程」返回，且 executor 的 merged_sources 持有同一引用，
+                # related_sections 的就地累加对 merged 可见，故不会丢。
+                if url in existing_by_url:
+                    src = existing_by_url[url]
+                    if section_id not in src.get("related_sections", []):
+                        src.setdefault("related_sections", []).append(section_id)
+                    continue
+                src = {
+                    "url": url,
+                    "title": r.get("title", ""),
+                    "site_name": r.get("site_name", ""),
+                    "date": r.get("date", ""),
+                    "text": r.get("summary", "") or r.get("snippet", ""),
+                    "related_sections": [section_id],
+                    "relevance_score": r.get("relevance_score", 0.0),
+                }
+                state["raw_sources"].append(src)   # 机制 1
+                existing_by_url[url] = src
+                local_sources.append(src)          # 机制 2（同一引用）
+
+            # 提取并添加事实（_ingest_facts 返回本次新增对象）
             url_date_map = {r.get("url", ""): r.get("date", "") for r in results}
-            added_facts = self._ingest_facts(
+            local_facts = self._ingest_facts(
                 state, analysis, section_id, query, search_type, depth, url_date_map
             )
 
             self.logger.info(
                 f"Deep search ({search_type}, depth={depth}): "
-                f"+{added_facts} facts for query '{query[:30]}...'"
+                f"+{len(local_facts)} facts for query '{query[:30]}...'"
             )
 
-            # 递归更深层线索（深度受 max_depth 控）
+            # 递归更深层线索（深度受 max_depth 控），把更深层新增并入本协程返回
             if depth < max_depth:
                 further_tracing = analysis.get("further_tracing_queries", [])
                 if further_tracing:
@@ -1262,24 +1261,38 @@ URL: {url}
                         "agent": self.name,
                         "content": f"发现更深层线索 (深度{depth+1}): {', '.join(further_tracing[:2])}",
                     })
-                    await self._execute_deep_search(
+                    deeper = await self._execute_deep_search(
                         state, section_id, further_tracing[:2],
                         search_type, hypotheses,
                         depth=depth + 1, max_depth=max_depth,
                     )
+                    local_facts.extend(deeper.get("facts", []))
+                    local_sources.extend(deeper.get("sources", []))
+
+            return {"facts": local_facts, "sources": local_sources}
 
         # 并行处理本层所有 query（每 query 内部仍按原顺序：search → analyze → ingest）
         results_or_excs = await asyncio.gather(
             *[_process_one_query(q) for q in queries],
             return_exceptions=True,
         )
-        errs = [r for r in results_or_excs if isinstance(r, Exception)]
+        agg_facts: List[Dict[str, Any]] = []
+        agg_sources: List[Dict[str, Any]] = []
+        errs = []
+        for r in results_or_excs:
+            if isinstance(r, Exception):
+                errs.append(r)
+                continue
+            if r:
+                agg_facts.extend(r.get("facts", []))
+                agg_sources.extend(r.get("sources", []))
         if errs:
             self.logger.warning(
                 f"[Scout._execute_deep_search] {len(errs)}/{len(queries)} "
                 f"queries failed (depth={depth}): "
                 f"{[(type(e).__name__, str(e)[:80]) for e in errs[:3]]}"
             )
+        return {"facts": agg_facts, "sources": agg_sources}
 
     async def _analyze_deep_search_results(
         self,
@@ -1289,7 +1302,7 @@ URL: {url}
         search_type: str,
         hypotheses: List[Dict],
         state: Optional[ResearchState] = None,
-    ) -> Optional[Dict]:
+    ) -> Tuple[Optional[Dict], List[Dict]]:
         """分析深度搜索结果"""
         guarded = guard_results(
             results,
@@ -1344,9 +1357,6 @@ URL: {url}
             "hypothesis_support": "supports/refutes/neutral"
         }}
     ],
-    "data_points": [
-        {{"name": "指标名", "value": "数值", "unit": "单位", "year": 2024}}
-    ],
     "further_tracing_queries": ["如果发现引用了其他权威来源，建议进一步追溯的查询"],
     "source_reliability": "对本次搜索来源可靠性的评估"
 }}
@@ -1362,7 +1372,7 @@ URL: {url}
             action="analyze_deep_search_results",
         )
 
-        return self.parse_json_response(response)
+        return self.parse_json_response(response), reranked
 
     async def _execute_local_search(self, query: str, top_k: int = 10) -> List[Dict]:
         """
@@ -1870,9 +1880,9 @@ URL: {r.get('url', '')}
     ) -> Dict[str, Any]:
         """v3 入口：按章节维度执行搜索 + fact 提取
 
-        现有 _execute_deep_search 会通过 _ingest_facts 直接 mutate state['facts']
-        和 state['data_points']。本方法用 snapshot/diff 方案捕获新增项返回，
-        state 仍被 mutate（保留现有逻辑），调用方（executor）应知晓这一点。
+        `_execute_deep_search` 通过 `_ingest_facts` 在 state['facts'] 上做 in-place mutation
+        （节点内数据流），并把本次新增的 fact/source 对象按协程收集后返回（供 executor 合并，
+        避免并发切片重叠）。
 
         Args:
             section_id: 当前搜索的章节 ID
@@ -1883,11 +1893,7 @@ URL: {r.get('url', '')}
             {"facts": [...], "sources": [...], "section_id": section_id}
             facts/sources 仅含本次新增项。
         """
-        facts_before = len(state.get("facts", []))
-        sources_before = len(state.get("raw_sources", []))
-
-        # 复用现有递归搜索逻辑（mutates state）
-        await self._execute_deep_search(
+        result = await self._execute_deep_search(
             state=state,
             section_id=section_id,
             queries=queries,
@@ -1896,11 +1902,8 @@ URL: {r.get('url', '')}
             depth=1,
             max_depth=2,
         )
-
-        new_facts = state.get("facts", [])[facts_before:]
-        new_sources = state.get("raw_sources", [])[sources_before:]
         return {
-            "facts": new_facts,
-            "sources": new_sources,
+            "facts": result.get("facts", []),
+            "sources": result.get("sources", []),
             "section_id": section_id,
         }

@@ -183,6 +183,8 @@ class ResearchState(TypedDict):
     facts: List[Dict[str, Any]]             # 结构化事实库
     data_points: List[Dict[str, Any]]       # 数据点
     raw_sources: List[Dict[str, Any]]       # 原始来源（网页内容）
+    time_series: List[Dict[str, Any]]       # 时间序列数据（DataAnalyst 抽取，仅存待消费）
+    distributions: List[Dict[str, Any]]     # 分布/占比数据（DataAnalyst 抽取，仅存待消费）
 
     # 分析输出
     charts: List[Dict[str, Any]]            # 生成的图表
@@ -254,6 +256,8 @@ def create_initial_state(
         facts=[],
         data_points=[],
         raw_sources=[],
+        time_series=[],
+        distributions=[],
         charts=[],
         code_executions=[],
         insights=[],

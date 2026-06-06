@@ -111,3 +111,11 @@ def test_research_state_scoping_and_outline_approval_defaults():
     assert state["scoping_summary"] == {}
     assert state["outline_approval_status"] == "pending"
     assert state["approved_outline"] == []
+
+
+def test_initial_state_has_timeseries_and_distributions():
+    """create_initial_state 应初始化 time_series / distributions 为空 list"""
+    from app.service.deep_research_v2.state import create_initial_state
+    state = create_initial_state(query="q", session_id="sid")
+    assert state["time_series"] == []
+    assert state["distributions"] == []
