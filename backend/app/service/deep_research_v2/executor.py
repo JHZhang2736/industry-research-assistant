@@ -123,6 +123,26 @@ def _resolve_callable(tool_obj):
     return fn or tool_obj
 
 
+def _merge_raw_sources(merged_sources, sources_by_url, new_sources):
+    """按 url 去重把 new_sources 并进 merged_sources（原地）。
+
+    已存在的 url 累加 related_sections（去重），新 url 追加。覆盖式合并模型下，
+    跨章节/跨 tool 的同 url raw_source 必须在此统一去重。
+    """
+    for src in new_sources:
+        url = src.get("url")
+        if url and url in sources_by_url:
+            existing = sources_by_url[url]
+            existing.setdefault("related_sections", [])
+            for sid in src.get("related_sections", []):
+                if sid not in existing["related_sections"]:
+                    existing["related_sections"].append(sid)
+        else:
+            merged_sources.append(src)
+            if url:
+                sources_by_url[url] = src
+
+
 # tool 名 -> 前端 research_step.step_type（驱动侧边栏详情容器）
 # search_section 故意映射到 'searching'（前端 search_results 优先找 searching）
 # generate_charts 复用 'analyzing'（前端 charts 事件 attach 到 analyzing 详情）
@@ -347,10 +367,13 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
 
     merged_facts = list(state.get("facts", []))
     merged_sources = list(state.get("raw_sources", []))
+    _sources_by_url = {s.get("url"): s for s in merged_sources if s.get("url")}
     merged_data_points = list(state.get("data_points", []))
     merged_charts = list(state.get("charts", []))
     merged_code_executions = list(state.get("code_executions", []))
     merged_insights = list(state.get("insights", []))
+    merged_time_series = list(state.get("time_series", []))
+    merged_distributions = list(state.get("distributions", []))
     merged_draft_sections = dict(state.get("draft_sections", {}))
     merged_critic_diagnostics = list(state.get("critic_diagnostics", []) or [])
 
@@ -389,10 +412,12 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
 
             if result["tool"] == "search_section":
                 merged_facts.extend(output.get("facts", []))
-                merged_sources.extend(output.get("sources", []))
+                _merge_raw_sources(merged_sources, _sources_by_url, output.get("sources", []))
             elif result["tool"] == "analyze_facts":
                 merged_data_points.extend(output.get("data_points", []))
                 merged_insights.extend(output.get("insights", []))
+                merged_time_series.extend(output.get("time_series", []))
+                merged_distributions.extend(output.get("distributions", []))
             elif result["tool"] == "generate_charts":
                 merged_charts.extend(output.get("charts", []))
                 merged_code_executions.extend(output.get("code_executions", []))
@@ -475,6 +500,8 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
         "facts": merged_facts,
         "raw_sources": merged_sources,
         "data_points": merged_data_points,
+        "time_series": merged_time_series,
+        "distributions": merged_distributions,
         "charts": merged_charts,
         "code_executions": merged_code_executions,
         "insights": merged_insights,
