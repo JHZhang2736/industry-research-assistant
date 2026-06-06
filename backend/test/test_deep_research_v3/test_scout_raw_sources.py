@@ -68,3 +68,68 @@ def test_scout_no_longer_emits_data_points():
     scout._ingest_facts(state, analysis, "sec_1", "q", "follow_up", 1,
                         {"http://a.com": "2026-01-01"})
     assert state["data_points"] == []
+
+
+def _fake_search_factory():
+    async def fake_execute_search(query, count=6):
+        return [{"url": f"http://ex.com/{query}", "title": query, "summary": f"summary {query}",
+                 "site_name": "Ex", "date": "2026-01-01", "relevance_score": 0.9}]
+    return fake_execute_search
+
+
+def _fake_analyze_factory():
+    async def fake_analyze(original_query, search_query, results, search_type, hypotheses, state=None):
+        # 注意：_compute_fact_fingerprint 用 numbers[:3] + CJK关键词[:5] 做指纹。
+        # 纯 ASCII / 无数字的 content 会得到相同指纹 → 被误判重复而丢弃。
+        # 这里给每个 query 注入一个唯一数字（ord 首字母），保证指纹互异。
+        uniq = ord(search_query[0])  # a/b/c/d -> 97/98/99/100
+        analysis = {
+            "extracted_facts": [
+                {"content": f"指标数值 {uniq} 来自查询", "source_url": f"http://ex.com/{search_query}",
+                 "source_name": "Ex", "credibility_score": 0.9},
+            ],
+            "further_tracing_queries": [],
+        }
+        return analysis, results  # reranked = results
+    return fake_analyze
+
+
+@pytest.mark.asyncio
+async def test_search_with_queries_concurrent_no_duplicate(monkeypatch):
+    """两个 section 并发跑，返回的 facts/sources 无重复、总数正确（修复并发重复计数）"""
+    scout = _make_scout()
+    monkeypatch.setattr(scout, "_execute_search", _fake_search_factory())
+    monkeypatch.setattr(scout, "_analyze_deep_search_results", _fake_analyze_factory())
+
+    state = create_initial_state("q", "sid")
+    res = await asyncio.gather(
+        scout.search_with_queries("sec_1", ["a", "b"], state),
+        scout.search_with_queries("sec_2", ["c", "d"], state),
+    )
+    facts = res[0]["facts"] + res[1]["facts"]
+    fact_ids = [f["id"] for f in facts]
+    assert len(fact_ids) == len(set(fact_ids)), "返回的 fact 不应重复"
+    assert len(facts) == 4, "4 个 query 各 1 fact"
+
+    sources = res[0]["sources"] + res[1]["sources"]
+    urls = [s["url"] for s in sources]
+    assert len(urls) == len(set(urls)), "返回的 source url 不应重复"
+    assert len(sources) == 4
+
+
+@pytest.mark.asyncio
+async def test_raw_sources_written_with_relevance(monkeypatch):
+    """raw_sources 被写入 state，带 relevance_score / related_sections / text"""
+    scout = _make_scout()
+    monkeypatch.setattr(scout, "_execute_search", _fake_search_factory())
+    monkeypatch.setattr(scout, "_analyze_deep_search_results", _fake_analyze_factory())
+
+    state = create_initial_state("q", "sid")
+    await scout.search_with_queries("sec_1", ["a"], state)
+
+    assert len(state["raw_sources"]) == 1
+    src = state["raw_sources"][0]
+    assert src["url"] == "http://ex.com/a"
+    assert src["relevance_score"] == 0.9
+    assert src["related_sections"] == ["sec_1"]
+    assert src["text"] == "summary a"
