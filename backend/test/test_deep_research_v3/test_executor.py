@@ -404,6 +404,11 @@ def test_merge_raw_sources_dedup_by_url():
     b = next(s for s in merged if s["url"] == "http://b.com")
     assert b["related_sections"] == ["sec_3"]
 
+    # 无 url 的 source：直接追加，不进 dedup 索引
+    _merge_raw_sources(merged, by_url, [{"text": "no url here"}])
+    assert any(s.get("text") == "no url here" for s in merged)
+    assert len(merged) == 3
+
 
 @pytest.mark.asyncio
 async def test_executor_merges_timeseries_distributions(monkeypatch):
@@ -427,3 +432,24 @@ async def test_executor_merges_timeseries_distributions(monkeypatch):
     assert out["time_series"] == [{"id": "ts1", "metric": "m"}]
     assert out["distributions"] == [{"id": "d1", "name": "n"}]
     assert out["data_points"][-1]["name"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_existing_timeseries(monkeypatch):
+    """已有 time_series/distributions 不被覆盖，新抽取的追加在后"""
+    from app.service.deep_research_v2 import executor as ex
+    from app.service.deep_research_v2.state import create_initial_state
+
+    async def fake_analyze(state):
+        return {"data_points": [], "insights": [],
+                "time_series": [{"id": "ts_new"}], "distributions": [{"id": "d_new"}]}
+
+    monkeypatch.setitem(ex.TOOL_REGISTRY, "analyze_facts", fake_analyze)
+    state = create_initial_state("q", "sid")
+    state["time_series"] = [{"id": "ts_old"}]
+    state["distributions"] = [{"id": "d_old"}]
+    state["plan"] = [{"step_id": "s1", "tool": "analyze_facts", "args": {},
+                      "depends_on": [], "parallel_group": None}]
+    out = await ex.executor_node(state)
+    assert out["time_series"] == [{"id": "ts_old"}, {"id": "ts_new"}]
+    assert out["distributions"] == [{"id": "d_old"}, {"id": "d_new"}]

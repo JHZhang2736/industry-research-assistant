@@ -128,6 +128,8 @@ def _merge_raw_sources(merged_sources, sources_by_url, new_sources):
 
     已存在的 url 累加 related_sections（去重），新 url 追加。覆盖式合并模型下，
     跨章节/跨 tool 的同 url raw_source 必须在此统一去重。
+    注意：existing 可能与 state["raw_sources"] 中的对象是同一引用（merged_sources = list(state[...]) 浅拷贝），
+    这里对 related_sections 的就地累加是有意为之；dedup 检查保证重复 sid 不会被重复追加（幂等）。
     """
     for src in new_sources:
         url = src.get("url")
@@ -367,7 +369,7 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
 
     merged_facts = list(state.get("facts", []))
     merged_sources = list(state.get("raw_sources", []))
-    _sources_by_url = {s.get("url"): s for s in merged_sources if s.get("url")}
+    sources_by_url = {s.get("url"): s for s in merged_sources if s.get("url")}
     merged_data_points = list(state.get("data_points", []))
     merged_charts = list(state.get("charts", []))
     merged_code_executions = list(state.get("code_executions", []))
@@ -412,7 +414,7 @@ async def executor_node(state: ResearchState) -> Dict[str, Any]:
 
             if result["tool"] == "search_section":
                 merged_facts.extend(output.get("facts", []))
-                _merge_raw_sources(merged_sources, _sources_by_url, output.get("sources", []))
+                _merge_raw_sources(merged_sources, sources_by_url, output.get("sources", []))
             elif result["tool"] == "analyze_facts":
                 merged_data_points.extend(output.get("data_points", []))
                 merged_insights.extend(output.get("insights", []))
