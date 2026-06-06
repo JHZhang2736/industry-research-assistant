@@ -133,3 +133,34 @@ async def test_raw_sources_written_with_relevance(monkeypatch):
     assert src["relevance_score"] == 0.9
     assert src["related_sections"] == ["sec_1"]
     assert src["text"] == "summary a"
+
+
+@pytest.mark.asyncio
+async def test_raw_sources_dedup_accumulates_related_sections(monkeypatch):
+    """同一 url 跨章节出现时，raw_sources 去重且累加 related_sections"""
+    scout = _make_scout()
+
+    async def fixed_search(query, count=6):
+        return [{"url": "http://same.com/x", "title": "T", "summary": "S",
+                 "site_name": "Ex", "date": "2026-01-01", "relevance_score": 0.9}]
+
+    async def fixed_analyze(oq, sq, results, st, hyp, state=None):
+        uniq = ord(sq[0])  # 唯一数字避免 fact 指纹误判
+        analysis = {
+            "extracted_facts": [
+                {"content": f"指标 {uniq} 数据", "source_url": "http://same.com/x",
+                 "source_name": "Ex", "credibility_score": 0.9},
+            ],
+            "further_tracing_queries": [],
+        }
+        return analysis, results
+
+    monkeypatch.setattr(scout, "_execute_search", fixed_search)
+    monkeypatch.setattr(scout, "_analyze_deep_search_results", fixed_analyze)
+
+    state = create_initial_state("q", "sid")
+    await scout.search_with_queries("sec_1", ["a"], state)
+    await scout.search_with_queries("sec_2", ["b"], state)
+
+    assert len(state["raw_sources"]) == 1, "同 url 应去重为一条"
+    assert state["raw_sources"][0]["related_sections"] == ["sec_1", "sec_2"]

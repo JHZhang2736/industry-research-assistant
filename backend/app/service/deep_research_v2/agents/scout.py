@@ -15,7 +15,7 @@ import asyncio
 import hashlib
 import re
 import requests
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
 from .base import BaseAgent
@@ -1237,6 +1237,9 @@ URL: {url}
                 url = r.get("url", "")
                 if not url:
                     continue
+                # 已有 url：只就地累加 section_id（机制 1）。不重复加进 local_sources——
+                # 该 source 已被「首个遇到它的协程」返回，且 executor 的 merged_sources 持有同一引用，
+                # related_sections 的就地累加对 merged 可见，故不会丢。
                 if url in existing_by_url:
                     src = existing_by_url[url]
                     if section_id not in src.get("related_sections", []):
@@ -1315,7 +1318,7 @@ URL: {url}
         search_type: str,
         hypotheses: List[Dict],
         state: Optional[ResearchState] = None,
-    ) -> Optional[Dict]:
+    ) -> Tuple[Optional[Dict], List[Dict]]:
         """分析深度搜索结果"""
         guarded = guard_results(
             results,
@@ -1893,9 +1896,9 @@ URL: {r.get('url', '')}
     ) -> Dict[str, Any]:
         """v3 入口：按章节维度执行搜索 + fact 提取
 
-        现有 _execute_deep_search 会通过 _ingest_facts 直接 mutate state['facts']
-        和 state['data_points']。返回本次新增的 fact/source 对象（每协程收集，避免并发切片重叠），
-        state 仍被 mutate（保留现有逻辑），调用方（executor）应知晓这一点。
+        `_execute_deep_search` 通过 `_ingest_facts` 在 state['facts'] 上做 in-place mutation
+        （节点内数据流），并把本次新增的 fact/source 对象按协程收集后返回（供 executor 合并，
+        避免并发切片重叠）。
 
         Args:
             section_id: 当前搜索的章节 ID
