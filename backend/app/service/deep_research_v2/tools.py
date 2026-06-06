@@ -95,25 +95,35 @@ def get_analyst_instance() -> DataAnalyst:
 
 @tool
 async def analyze_facts(state: ResearchState) -> Dict[str, Any]:
-    """从已收集的 facts 中提取 data points + 生成 insights。
+    """从 raw_sources（未压缩原文）提取 data points + time_series/distributions + insights。
 
     Args:
-        state: 共享 ResearchState，读取 state["facts"]
+        state: 共享 ResearchState，读取 state["raw_sources"]
 
     Returns:
         {
             "data_points": [...],
             "insights": [str, ...],
+            "time_series": [...],
+            "distributions": [...],
         }
     """
     analyst = get_analyst_instance()
     try:
-        return await analyst.extract_data_points(state)
+        result = await analyst.extract_data_points(state)
+        return {
+            "data_points": result.get("data_points", []),
+            "insights": result.get("insights", []),
+            "time_series": result.get("time_series", []),
+            "distributions": result.get("distributions", []),
+        }
     except Exception as e:
         logger.exception(f"analyze_facts failed: {e}")
         return {
             "data_points": [],
             "insights": [],
+            "time_series": [],
+            "distributions": [],
             "error": str(e),
         }
 

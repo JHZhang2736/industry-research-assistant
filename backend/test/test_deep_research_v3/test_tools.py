@@ -149,3 +149,28 @@ async def test_write_section_returns_draft(monkeypatch):
 
     assert result["section_id"] == "sec_1"
     assert "content" in result
+
+
+@pytest.mark.asyncio
+async def test_analyze_facts_returns_timeseries_distributions(monkeypatch):
+    """analyze_facts 返回里含 time_series / distributions"""
+    from app.service.deep_research_v2.tools import analyze_facts
+
+    state = create_initial_state(query="测试", session_id="sid_1")
+    state["raw_sources"] = [{"url": "http://a.com", "text": "x", "relevance_score": 0.9}]
+
+    mock_analyst = AsyncMock()
+    mock_analyst.extract_data_points = AsyncMock(return_value={
+        "data_points": [{"name": "m"}],
+        "insights": ["i"],
+        "time_series": [{"id": "ts1"}],
+        "distributions": [{"id": "d1"}],
+    })
+    monkeypatch.setattr(
+        "app.service.deep_research_v2.tools.get_analyst_instance",
+        lambda: mock_analyst,
+    )
+
+    result = await analyze_facts.ainvoke({"state": state})
+    assert result["time_series"] == [{"id": "ts1"}]
+    assert result["distributions"] == [{"id": "d1"}]
