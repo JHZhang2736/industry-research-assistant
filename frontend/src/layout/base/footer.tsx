@@ -57,14 +57,14 @@ export function Footer() {
         trigger={['click']}
         overlayClassName="user-dropdown-overlay"
       >
-        <div className="user-avatar-wrapper">
-          <Avatar
-            size={36}
-            icon={<UserOutlined />}
-            className="user-avatar"
-          >
+        <div className="account-row">
+          <Avatar size={32} icon={<UserOutlined />} className="user-avatar">
             {getAvatarText()}
           </Avatar>
+          <div className="account-row__meta">
+            <div className="account-row__name">{user?.username || '用户'}</div>
+            <div className="account-row__sub">个人工作区</div>
+          </div>
         </div>
       </Dropdown>
     </div>

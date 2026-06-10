@@ -1,12 +1,17 @@
-
-
 .base-layout-nav {
   flex-grow: 1;
   flex-shrink: 0;
   overflow: auto;
   display: flex;
-  align-items: center;
   flex-direction: column;
-  gap: 8px;
-  padding: 20px 0;
+  align-items: stretch;
+  gap: 3px;
+
+  .base-layout-nav__label {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    padding: 6px 8px 10px;
+  }
 }

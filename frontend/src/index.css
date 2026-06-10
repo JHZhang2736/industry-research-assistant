@@ -1,14 +1,48 @@
-
+@font-face {
+  font-family: 'Smiley Sans';
+  src: url('./assets/fonts/SmileySans-Oblique.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 :root {
-  background-color: #fff;
+  /* 主色 */
+  --acc: #2563eb;
+  --acc-2: #3b82f6;
+  --acc-grad: linear-gradient(135deg, #2563eb, #3b82f6);
+  --acc-soft: #eef3ff;
+
+  /* 中性层次 */
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --border: #eef0f6;
+  --text-1: #15172b;
+  --text-2: #646a82;
+  --text-3: #a9adc0;
+
+  /* 语义色（研究模板卡） */
+  --ok: #1f9d57;
+  --warn: #d97706;
+  --magenta: #db2777;
+
+  /* 圆角 / 阴影 */
+  --radius-card: 14px;
+  --radius-ctl: 11px;
+  --shadow-sm: 0 8px 24px rgba(40, 42, 80, 0.06);
+  --shadow-md: 0 12px 28px rgba(40, 42, 80, 0.1);
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --font-display: 'Smiley Sans', var(--font-sans);
+  --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  background-color: var(--bg);
+  color: var(--text-1);
   font-size: 14px;
   line-height: 1.5;
-  font-family:
-    Inter,
-    Pingfang SC,
-    Microsoft Yahei,
-    sans-serif;
+  font-family: var(--font-sans);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;

@@ -32,7 +32,7 @@
       &.ant-tag-processing {
         background: #e6f4ff;
         border-color: #91caff;
-        color: #1677ff;
+        color: var(--ant-color-primary);
       }
 
       &.ant-tag-error {

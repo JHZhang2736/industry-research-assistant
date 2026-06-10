@@ -7,9 +7,6 @@ import LoginPage from '@/pages/auth/login'
 import Chat from '@/pages/chat'
 import NewChat from '@/pages/chat/newchat'
 import Index from '@/pages/index'
-import KnowledgePage from '@/pages/knowledge'
-import MemoryPage from '@/pages/memory'
-import DatabasePage from '@/pages/database'
 import {
   Navigate,
   Outlet,
@@ -42,18 +39,6 @@ export const routes: IRouteObject[] = [
         Component: Chat,
       },
     ],
-  },
-  {
-    path: '/knowledge',
-    Component: KnowledgePage,
-  },
-  {
-    path: '/memory',
-    Component: MemoryPage,
-  },
-  {
-    path: '/database',
-    Component: DatabasePage,
   },
   {
     path: '/404',
