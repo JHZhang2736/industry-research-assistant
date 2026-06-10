@@ -11,8 +11,10 @@ function App() {
       theme={{
         cssVar: true,
         token: {
-          colorPrimary: '#2861E7',
-          borderRadius: 6
+          colorPrimary: '#2563EB',
+          borderRadius: 10,
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif",
         },
       }}
       locale={zhCN}
